@@ -31,6 +31,19 @@ interface StatusResponse {
   pollEveryMs?: number;
 }
 
+const STATUSES: readonly StatusResponse["status"][] = ["pending", "claimed", "approved", "denied", "expired"];
+
+/** A status payload with every field in its declared type; the key is only ever stored from one of these. */
+function isStatusResponse(v: unknown): v is StatusResponse {
+  if (!v || typeof v !== "object") return false;
+  const s = v as Record<string, unknown>;
+  if (!STATUSES.includes(s.status as StatusResponse["status"])) return false;
+  if (s.apiKey !== undefined && (typeof s.apiKey !== "string" || s.apiKey.length === 0)) return false;
+  if (s.keyExpiresAt !== undefined && typeof s.keyExpiresAt !== "string") return false;
+  if (s.pollEveryMs !== undefined && typeof s.pollEveryMs !== "number") return false;
+  return true;
+}
+
 /** Guess a readable agent name from the environment when none is given. */
 export function defaultAgentName(): string {
   if (process.env.FORMWARD_AGENT_NAME) return process.env.FORMWARD_AGENT_NAME;
@@ -93,9 +106,10 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
       }
       const body: unknown = await res.json();
       // A 200 with a body that is not a status object (null, a string, a
-      // proxy's HTML-as-JSON) is as transient as a dropped connection.
-      if (!body || typeof body !== "object" || typeof (body as StatusResponse).status !== "string") continue;
-      status = body as StatusResponse;
+      // proxy's HTML-as-JSON, an unknown status, a non-string key) is as
+      // transient as a dropped connection: nothing from it gets stored.
+      if (!isStatusResponse(body)) continue;
+      status = body;
     } catch {
       continue; // transient network error or non-JSON body: keep polling until the deadline
     }

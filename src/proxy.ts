@@ -194,6 +194,10 @@ function isResponseFor(v: unknown, id: string | number | null): v is JsonRpcMess
   const m = v as JsonRpcMessage;
   if (m.jsonrpc !== "2.0") return false;
   if (("result" in m) === ("error" in m)) return false;
+  if ("error" in m) {
+    const e = m.error as { code?: unknown; message?: unknown } | null;
+    if (!e || typeof e !== "object" || typeof e.code !== "number" || typeof e.message !== "string") return false;
+  }
   // forward() only sends requests that already passed isValidRequest, so the
   // reply must echo the id exactly; a null-id error cannot be correlated.
   return m.id === id;
@@ -318,7 +322,8 @@ function isValidRequest(msg: JsonRpcMessage): boolean {
 function handleUnpaired(msg: JsonRpcMessage): JsonRpcMessage | null {
   const id = msg.id;
   const method = msg.method ?? "";
-  if (method.startsWith("notifications/")) return null;
+  // A notification is defined by the missing id, not by its method name: an
+  // id-bearing "notifications/..." request still gets an answer below.
   if (id === undefined) return null;
   switch (method) {
     case "initialize": {

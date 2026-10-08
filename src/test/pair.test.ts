@@ -174,3 +174,25 @@ test("an empty lock left by a crash during creation is taken over once it is old
   assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("an approved payload with a malformed key is transient and nothing is stored from it", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const calls: Call[] = [];
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-pair-shape-"));
+  process.env.FORMWARD_CREDENTIALS_FILE = path.join(dir, "credentials.json");
+  const f = fakeFetch(
+    {
+      "https://app.test/api/agent-pairing/claim": () => Response.json(CLAIM, { status: 201 }),
+      "https://app.test/api/agent-pairing/status": (_init, n) =>
+        n === 1 ? Response.json({ status: "approved", apiKey: {} }) : n === 2 ? Response.json({ status: "surprise" }) : Response.json({ status: "approved", apiKey: "fwk_live_ok" }),
+    },
+    calls,
+  );
+  const result = await pair({ api: "https://app.test", code: "ABCD-EFGH", agentName: "t", fetchImpl: f, sleep: noSleep });
+  assert.equal(result.ok, true);
+  assert.equal(calls.filter((c) => c.url.includes("/status")).length, 3);
+  const stored = JSON.parse(fs.readFileSync(process.env.FORMWARD_CREDENTIALS_FILE, "utf8")) as Record<string, { apiKey: unknown }>;
+  assert.equal(stored["https://app.test"].apiKey, "fwk_live_ok");
+  fs.rmSync(dir, { recursive: true, force: true });
+});

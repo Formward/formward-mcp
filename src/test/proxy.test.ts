@@ -415,3 +415,21 @@ test("method names that look like parser sentinels are ordinary methods", async 
     assert.equal(calls.length, 2);
   }
 });
+
+test("an error member must be a real JSON-RPC error object", async () => {
+  for (const body of ['{"jsonrpc":"2.0","id":71,"error":null}', '{"jsonrpc":"2.0","id":71,"error":{"message":"x"}}', '{"jsonrpc":"2.0","id":71,"error":{"code":"1","message":"x"}}']) {
+    const f = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response(body, { status: 200, headers: { "content-type": "application/json" } }) }, []);
+    const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 71, method: "ping" }), deps(f))) as JsonRpcMessage;
+    assert.match((reply.error as { message: string }).message, /malformed JSON-RPC response/, body);
+  }
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => Response.json({ jsonrpc: "2.0", id: 71, error: { code: -32601, message: "Method not found" } }) }, []);
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 71, method: "nope" }), deps(f))) as JsonRpcMessage;
+  assert.deepEqual(reply.error, { code: -32601, message: "Method not found" });
+});
+
+test("unpaired: an id-bearing request under notifications/ is answered, a real notification is not", async () => {
+  const d = { ...deps(fakeFetch({}, [])), apiKey: null };
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 72, method: "notifications/custom" }), d)) as JsonRpcMessage;
+  assert.equal((reply.error as { code: number }).code, -32601);
+  assert.equal(await handleLine(JSON.stringify({ jsonrpc: "2.0", method: "notifications/custom" }), d), null);
+});
