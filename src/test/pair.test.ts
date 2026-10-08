@@ -101,20 +101,42 @@ test("concurrent saves for different origins both survive", async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("a stale lock is taken over, and concurrent takers still serialize", async () => {
+test("a lock left by a dead process is taken over, and concurrent takers still serialize", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
   const { loadCredential, saveCredential } = await import("../config");
   const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-stale-"));
   const file = path.join(dir, "credentials.json");
   process.env.FORMWARD_CREDENTIALS_FILE = file;
-  fs.writeFileSync(`${file}.lock`, "");
-  const old = new Date(Date.now() - 60_000);
-  fs.utimesSync(`${file}.lock`, old, old);
+  // A pid no live process has (near the platform maximum), written seconds ago: age is irrelevant, liveness decides.
+  fs.writeFileSync(`${file}.lock`, "2147483646:deadbeef");
   const cred = (apiKey: string) => ({ apiKey, workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" });
   await Promise.all(["a", "b", "c"].map((n) => saveCredential(`https://${n}.test`, cred(`fwk_${n}`))));
   for (const n of ["a", "b", "c"]) assert.equal((await loadCredential(`https://${n}.test`))?.apiKey, `fwk_${n}`);
   assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a lock held by a live process is never taken over, and its file is left alone", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { saveCredential } = await import("../config");
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-live-"));
+  const file = path.join(dir, "credentials.json");
+  process.env.FORMWARD_CREDENTIALS_FILE = file;
+  process.env.FORMWARD_LOCK_TIMEOUT_MS = "300";
+  // Held by this very process under another token: alive, so it must be respected until the timeout.
+  const foreign = `${process.pid}:someone-else`;
+  fs.writeFileSync(`${file}.lock`, foreign);
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(`${file}.lock`, old, old);
+  await assert.rejects(
+    saveCredential("https://a.test", { apiKey: "fwk_a", workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" }),
+    /locked by another formward-mcp process/,
+  );
+  assert.equal(fs.readFileSync(`${file}.lock`, "utf8"), foreign);
+  assert.equal(fs.existsSync(file), false);
+  delete process.env.FORMWARD_LOCK_TIMEOUT_MS;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

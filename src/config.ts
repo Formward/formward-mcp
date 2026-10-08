@@ -110,31 +110,48 @@ async function writeAll(file: string, all: CredentialFile): Promise<void> {
 async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
-  const deadline = Date.now() + 5000;
+  // The lock names its owner. A lock is taken over only when that process is
+  // gone (never on age alone: a suspended or stalled owner is still an
+  // owner), and a process removes only a lock that still carries its own
+  // token, so a takeover can never be undone by the previous owner's cleanup.
+  const token = `${process.pid}:${Math.random().toString(36).slice(2)}`;
+  const timeoutMs = Number(process.env.FORMWARD_LOCK_TIMEOUT_MS) || 15_000;
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
       const handle = await fs.open(lock, "wx");
+      await handle.writeFile(token);
       await handle.close();
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      const age = await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
-      if (age > 10_000) {
-        // Take the stale lock over by renaming it: only one process can win
-        // the rename, so a competitor cannot unlink a lock that was just
-        // re-created by the winner. The loser simply tries again.
+      const owner = await fs.readFile(lock, "utf8").catch(() => "");
+      const ownerPid = Number(owner.split(":")[0]);
+      if (owner && ownerPid !== process.pid && !processAlive(ownerPid)) {
+        // Only one contender wins the rename, so nobody can unlink a lock the
+        // winner has just re-created. Losers try again.
         const taken = `${lock}.${process.pid}.stale`;
         await fs.rename(lock, taken).then(() => fs.rm(taken, { force: true }), () => undefined);
         continue;
       }
-      if (Date.now() > deadline) throw new Error(`Credentials file is locked by another formward-mcp process (${lock}).`);
+      if (Date.now() > deadline) throw new Error(`Credentials file is locked by another formward-mcp process (${owner.split(":")[0] || "unknown pid"}): ${lock}`);
       await new Promise((r) => setTimeout(r, 25 + Math.random() * 50));
     }
   }
   try {
     return await fn();
   } finally {
-    await fs.rm(lock, { force: true });
+    if ((await fs.readFile(lock, "utf8").catch(() => "")) === token) await fs.rm(lock, { force: true });
+  }
+}
+
+function processAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM"; // exists, owned by someone else
   }
 }
 
