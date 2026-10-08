@@ -153,10 +153,14 @@ async function main(): Promise<number> {
   }
 }
 
+// Set the exit code and let the event loop drain: a process.exit() right after
+// the last stdout.write() can truncate a reply larger than the pipe buffer.
 main().then(
-  (code) => process.exit(code),
+  (code) => {
+    process.exitCode = code;
+  },
   (e) => {
     process.stderr.write(`formward-mcp: ${e instanceof Error ? e.message : String(e)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   },
 );

@@ -210,8 +210,18 @@ function safeJson(text: string): unknown {
   }
 }
 
+/** A well-formed JSON-RPC 2.0 request or notification (the backend validates forwarded ones; local handling must too). */
+function isValidRequest(msg: JsonRpcMessage): boolean {
+  if (msg.jsonrpc !== "2.0" || typeof msg.method !== "string") return false;
+  if (msg.id !== undefined && msg.id !== null && typeof msg.id !== "string" && typeof msg.id !== "number") return false;
+  return msg.params === undefined || (typeof msg.params === "object" && msg.params !== null && !Array.isArray(msg.params));
+}
+
 /** One message: local tool, or forwarded with the local tool spliced into tools/list. */
 async function handleOne(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcMessage | null> {
+  if (!isValidRequest(msg)) {
+    return msg.id === undefined ? null : rpcError(msg.id, "Invalid Request", -32600);
+  }
   if (msg.method === "tools/call" && msg.params?.name === TEST_TOOL.name) {
     const args = (msg.params.arguments ?? {}) as Record<string, unknown>;
     const out = await sendTestSubmission(args, deps);

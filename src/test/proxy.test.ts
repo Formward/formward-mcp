@@ -68,6 +68,20 @@ test("an empty-bodied failure still gets an RPC error and non-ASCII agent names 
   assert.equal(await handleLine(JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled" }), deps(quiet)), null);
 });
 
+test("a non-2.0 request never runs the local tool", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch({ "https://forms.test/f/f1": () => Response.json({ ok: true }) }, calls);
+  const reply = (await handleLine(
+    JSON.stringify({ jsonrpc: "1.0", id: 12, method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId: "f1" } } }),
+    deps(f),
+  )) as JsonRpcMessage;
+  assert.deepEqual(reply.error, { code: -32600, message: "Invalid Request" });
+  assert.equal(calls.length, 0);
+  const silent = await handleLine(JSON.stringify({ method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId: "f1" } } }), deps(f));
+  assert.equal(silent, null);
+  assert.equal(calls.length, 0);
+});
+
 test("malformed input is answered with a parse error", async () => {
   const reply = (await handleLine("{not json", deps(fakeFetch({}, [])))) as JsonRpcMessage;
   assert.deepEqual(reply.error, { code: -32700, message: "Parse error" });
