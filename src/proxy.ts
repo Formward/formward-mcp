@@ -162,11 +162,19 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps, retried = fa
   if (res.status === 202 || !text) {
     return isNotification ? null : rpcError(id, `Formward API ${res.status}: empty response to a request.`);
   }
+  // Valid JSON of the wrong shape (null, an array, a string) must not pass
+  // through as the reply: a null would read as "nothing to write" and leave
+  // the client waiting for an answer that never comes.
+  let parsed: unknown;
   try {
-    return JSON.parse(text) as JsonRpcMessage;
+    parsed = JSON.parse(text);
   } catch {
     return rpcError(id, "Formward API returned a non-JSON response.");
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return rpcError(id, "Formward API returned a response that is not a JSON-RPC message.");
+  }
+  return parsed as JsonRpcMessage;
 }
 
 interface FormListItem {

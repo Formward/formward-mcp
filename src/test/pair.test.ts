@@ -100,3 +100,20 @@ test("concurrent saves for different origins both survive", async () => {
   assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("a stale lock is taken over, and concurrent takers still serialize", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { loadCredential, saveCredential } = await import("../config");
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-stale-"));
+  const file = path.join(dir, "credentials.json");
+  process.env.FORMWARD_CREDENTIALS_FILE = file;
+  fs.writeFileSync(`${file}.lock`, "");
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(`${file}.lock`, old, old);
+  const cred = (apiKey: string) => ({ apiKey, workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" });
+  await Promise.all(["a", "b", "c"].map((n) => saveCredential(`https://${n}.test`, cred(`fwk_${n}`))));
+  for (const n of ["a", "b", "c"]) assert.equal((await loadCredential(`https://${n}.test`))?.apiKey, `fwk_${n}`);
+  assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

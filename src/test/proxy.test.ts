@@ -371,3 +371,13 @@ test("every element of a batch sent with a stale key is retried with the fresh o
   assert.deepEqual(replies.map((r) => [r.id, r.error === undefined]), [[50, true], [51, true], [52, true]]);
   assert.equal(calls.length, 6);
 });
+
+test("a 200 whose JSON is not a message object is answered with an error, never silence", async () => {
+  for (const body of ["null", "[]", '"ok"', "1"]) {
+    const f = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response(body, { status: 200, headers: { "content-type": "application/json" } }) }, []);
+    const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 60, method: "ping" }), deps(f))) as JsonRpcMessage;
+    assert.ok(reply, `reply for body ${body}`);
+    assert.equal(reply.id, 60);
+    assert.match((reply.error as { message: string }).message, /not a JSON-RPC message/);
+  }
+});

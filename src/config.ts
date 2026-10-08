@@ -88,7 +88,11 @@ async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> 
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       const age = await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
       if (age > 10_000) {
-        await fs.rm(lock, { force: true });
+        // Take the stale lock over by renaming it: only one process can win
+        // the rename, so a competitor cannot unlink a lock that was just
+        // re-created by the winner. The loser simply tries again.
+        const taken = `${lock}.${process.pid}.stale`;
+        await fs.rename(lock, taken).then(() => fs.rm(taken, { force: true }), () => undefined);
         continue;
       }
       if (Date.now() > deadline) throw new Error(`Credentials file is locked by another formward-mcp process (${lock}).`);
