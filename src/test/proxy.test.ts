@@ -98,6 +98,12 @@ test("a malformed list_forms result becomes a tool error, not an exception", asy
   assert.match(result.content[0].text, /Could not list forms/);
 });
 
+test("a plain-text 401 still carries the pair-again hint", async () => {
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response("Unauthorized", { status: 401 }) }, []);
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 14, method: "ping" }), deps(f))) as JsonRpcMessage;
+  assert.match((reply.error as { message: string }).message, /401.*pair <code>/);
+});
+
 test("malformed input is answered with a parse error", async () => {
   const reply = (await handleLine("{not json", deps(fakeFetch({}, [])))) as JsonRpcMessage;
   assert.deepEqual(reply.error, { code: -32700, message: "Parse error" });

@@ -37,7 +37,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/test/proxy.test.js",
+    "test": "tsc -p tsconfig.json && node --test dist/test/proxy.test.js dist/test/pair.test.js",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {

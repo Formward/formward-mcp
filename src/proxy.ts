@@ -103,11 +103,12 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<Jso
     let detail = text || res.statusText || "empty response";
     try {
       const body = JSON.parse(text) as { error?: { message?: string; code?: string } };
-      detail = body.error?.message ?? text;
-      if (res.status === 401) detail += " The paired key may have expired or been revoked: run `npx @formward/mcp pair <code>` with a fresh code from the dashboard.";
+      detail = body.error?.message ?? detail;
     } catch {
       // keep raw text
     }
+    // The recovery hint depends on the status, not on whether the body parsed.
+    if (res.status === 401) detail += " The paired key may have expired or been revoked: run `npx @formward/mcp pair <code>` with a fresh code from the dashboard.";
     return rpcError(id, `Formward API ${res.status}: ${detail}`);
   }
   if (res.status === 202 || !text) return null;

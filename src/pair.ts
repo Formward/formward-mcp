@@ -82,6 +82,12 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
         every = Math.min(every * 2, 15000);
         continue;
       }
+      if (!res.ok) {
+        if (res.status >= 500) continue; // transient server error: keep polling until the deadline
+        // 400/401/404: this pairing cannot succeed; repeating the call would only run out the clock.
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        return { ok: false, reason: body.message || `Pairing status failed (${res.status}). Create a new code in the dashboard.` };
+      }
       status = (await res.json()) as StatusResponse;
     } catch {
       continue; // transient network error: keep polling until the deadline
