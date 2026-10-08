@@ -111,6 +111,55 @@ test("send_test_submission surfaces a failed lookup as a tool error", async () =
   assert.match(result.content[0].text, /Could not (list forms|reach)/);
 });
 
+test("a JSON-RPC batch gets local tools too and is answered as a batch", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch(
+    {
+      "https://app.test/api/v1/mcp": (init) => {
+        const msg = JSON.parse(String(init?.body)) as JsonRpcMessage;
+        assert.ok(!Array.isArray(msg), "elements are forwarded one by one");
+        if (msg.method === "tools/list") {
+          return Response.json({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "list_forms", description: "", inputSchema: {} }] } });
+        }
+        return listFormsRoute([{ id: "f1", name: "Contact", endpoint: "https://forms.test/f/f1" }])(init);
+      },
+      "https://forms.test/f/f1": () => Response.json({ ok: true, id: "sub-2" }),
+    },
+    calls,
+  );
+  const reply = (await handleLine(
+    JSON.stringify([
+      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId: "f1" } } },
+    ]),
+    deps(f),
+  )) as JsonRpcMessage[];
+  assert.ok(Array.isArray(reply));
+  assert.deepEqual(reply.map((r) => r.id), [1, 2]);
+  const tools = (reply[0].result as { tools: { name: string }[] }).tools.map((t) => t.name);
+  assert.deepEqual(tools, ["list_forms", TEST_TOOL.name]);
+  const sent = (reply[1].result as { isError: boolean; content: { text: string }[] });
+  assert.equal(sent.isError, false);
+  assert.ok(calls.some((c) => c.url === "https://forms.test/f/f1"));
+});
+
+test("a response body that fails to read becomes a per-request error, not a hung request", async () => {
+  const broken = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error("socket hang up"));
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": broken }, []);
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 9, method: "ping" }), deps(f))) as JsonRpcMessage;
+  assert.equal(reply.id, 9);
+  assert.match((reply.error as { message: string }).message, /socket hang up/);
+});
+
 test("send_test_submission refuses an unknown form without touching any endpoint", async () => {
   const calls: Call[] = [];
   const f = fakeFetch({ "https://app.test/api/v1/mcp": listFormsRoute([]) }, calls);

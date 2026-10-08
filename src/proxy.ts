@@ -63,10 +63,12 @@ export function parseLine(line: string): JsonRpcMessage | JsonRpcMessage[] | nul
 }
 
 /** Forward one message to the remote MCP endpoint. Returns null when there is nothing to write (notification). */
-export async function forward(msg: JsonRpcMessage | JsonRpcMessage[], deps: ProxyDeps): Promise<JsonRpcMessage | JsonRpcMessage[] | null> {
+export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcMessage | null> {
   const f = deps.fetchImpl ?? fetch;
-  const id = Array.isArray(msg) ? null : msg.id;
+  const id = msg.id;
+  const isNotification = msg.id === undefined;
   let res: Response;
+  let text: string;
   try {
     res = await f(`${deps.api}/api/v1/mcp`, {
       method: "POST",
@@ -78,14 +80,16 @@ export async function forward(msg: JsonRpcMessage | JsonRpcMessage[], deps: Prox
       },
       body: JSON.stringify(msg),
     });
+    // The body read can fail after fetch() resolved (connection dropped mid
+    // response); that is the same per-request error as an unreachable host.
+    text = await res.text();
   } catch (e) {
-    if (Array.isArray(msg) || msg.id === undefined) return null;
+    if (isNotification) return null;
     return rpcError(id, `Could not reach ${deps.api}: ${e instanceof Error ? e.message : String(e)}`);
   }
-  const text = await res.text();
   if (res.status === 202 || !text) return null;
   if (!res.ok) {
-    if (Array.isArray(msg) || msg.id === undefined) return null;
+    if (isNotification) return null;
     let detail = text;
     try {
       const body = JSON.parse(text) as { error?: { message?: string; code?: string } };
@@ -97,7 +101,7 @@ export async function forward(msg: JsonRpcMessage | JsonRpcMessage[], deps: Prox
     return rpcError(id, `Formward API ${res.status}: ${detail}`);
   }
   try {
-    return JSON.parse(text) as JsonRpcMessage | JsonRpcMessage[];
+    return JSON.parse(text) as JsonRpcMessage;
   } catch {
     return rpcError(id, "Formward API returned a non-JSON response.");
   }
@@ -115,7 +119,7 @@ interface FormListItem {
  * the Free plan included) and never depends on the plain REST API's plan gate.
  */
 async function lookupEndpoint(formId: string, deps: ProxyDeps): Promise<FormListItem | { error: string }> {
-  let reply: JsonRpcMessage | JsonRpcMessage[] | null;
+  let reply: JsonRpcMessage | null;
   try {
     reply = await forward({ jsonrpc: "2.0", id: "lookup", method: "tools/call", params: { name: "list_forms", arguments: {} } }, deps);
   } catch (e) {
@@ -123,7 +127,7 @@ async function lookupEndpoint(formId: string, deps: ProxyDeps): Promise<FormList
     // that would take the stdio session down with it.
     return { error: `Could not list forms: ${e instanceof Error ? e.message : String(e)}` };
   }
-  if (!reply || Array.isArray(reply)) return { error: "Could not list forms: empty response." };
+  if (!reply) return { error: "Could not list forms: empty response." };
   if (reply.error) return { error: `Could not list forms: ${(reply.error as { message?: string }).message ?? "error"}` };
   const result = reply.result as { content?: { type: string; text?: string }[]; isError?: boolean } | undefined;
   const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
@@ -194,25 +198,35 @@ function safeJson(text: string): unknown {
   }
 }
 
-/**
- * Handle one incoming line. Returns the message(s) to write back, or null.
- */
-export async function handleLine(line: string, deps: ProxyDeps): Promise<JsonRpcMessage | JsonRpcMessage[] | null> {
-  const msg = parseLine(line);
-  if (msg === null) return null;
-  if (!Array.isArray(msg) && msg.method === "__invalid__") return rpcError(null, "Parse error", -32700);
-  if (Array.isArray(msg)) return forward(msg, deps);
-
+/** One message: local tool, or forwarded with the local tool spliced into tools/list. */
+async function handleOne(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcMessage | null> {
   if (msg.method === "tools/call" && msg.params?.name === TEST_TOOL.name) {
     const args = (msg.params.arguments ?? {}) as Record<string, unknown>;
     const out = await sendTestSubmission(args, deps);
     return msg.id === undefined ? null : toolResult(msg.id, out.text, out.isError);
   }
-
   const reply = await forward(msg, deps);
-  if (msg.method === "tools/list" && reply && !Array.isArray(reply) && reply.result && typeof reply.result === "object") {
+  if (msg.method === "tools/list" && reply?.result && typeof reply.result === "object") {
     const result = reply.result as { tools?: unknown[] };
     if (Array.isArray(result.tools)) result.tools = [...result.tools, TEST_TOOL];
   }
   return reply;
+}
+
+/**
+ * Handle one incoming line. Returns the message(s) to write back, or null.
+ * A JSON-RPC batch is handled element by element (so local tools work inside
+ * it too) and answered as a batch of the non-notification replies.
+ */
+export async function handleLine(line: string, deps: ProxyDeps): Promise<JsonRpcMessage | JsonRpcMessage[] | null> {
+  const msg = parseLine(line);
+  if (msg === null) return null;
+  if (Array.isArray(msg)) {
+    if (msg.length === 0) return rpcError(null, "Invalid Request", -32600);
+    const replies = await Promise.all(msg.map((m) => (m && typeof m === "object" ? handleOne(m, deps) : Promise.resolve(rpcError(null, "Invalid Request", -32600)))));
+    const out = replies.filter((r): r is JsonRpcMessage => r !== null);
+    return out.length > 0 ? out : null;
+  }
+  if (msg.method === "__invalid__") return rpcError(null, "Parse error", -32700);
+  return handleOne(msg, deps);
 }
