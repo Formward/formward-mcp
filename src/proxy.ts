@@ -178,7 +178,11 @@ async function lookupEndpoint(formId: string, deps: ProxyDeps): Promise<FormList
     return { error: `Could not list forms: ${result?.isError ? text.slice(0, 300) : "unexpected response"}` };
   }
   if (result?.isError) return { error: `Could not list forms: ${text.slice(0, 300)}` };
-  const form = Array.isArray(body?.data) ? body.data.find((item) => item.id === formId) : undefined;
+  // Entries are checked one by one: a malformed element must not throw out of
+  // the tool (the stdio loop would only log it and the client would wait).
+  const form = Array.isArray(body?.data)
+    ? body.data.find((item) => item && typeof item === "object" && item.id === formId && typeof item.endpoint === "string")
+    : undefined;
   return form ?? { error: `No form ${formId} in this workspace. Call list_forms first.` };
 }
 

@@ -289,3 +289,15 @@ test("send_test_submission refuses an unknown form without touching any endpoint
   assert.match(result.content[0].text, /No form nope/);
   assert.equal(calls.length, 1);
 });
+
+test("send_test_submission skips malformed form-list entries instead of throwing", async () => {
+  const bad = [null, 7, { id: "f1" }, { id: "f1", name: "Contact", endpoint: "https://forms.test/f/f1" }] as unknown as { id: string; name: string; endpoint: string }[];
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": listFormsRoute(bad), "https://forms.test/f/f1": () => Response.json({ ok: true }) }, []);
+  const call = (formId: string) => JSON.stringify({ jsonrpc: "2.0", id: 30, method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId } } });
+  const ok = (await handleLine(call("f1"), deps(f))) as JsonRpcMessage;
+  assert.equal((ok.result as { isError: boolean }).isError, false);
+  const missing = (await handleLine(call("f9"), deps(f))) as JsonRpcMessage;
+  const result = missing.result as { isError: boolean; content: { text: string }[] };
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /No form f9/);
+});

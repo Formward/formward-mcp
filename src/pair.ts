@@ -91,9 +91,13 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
         const body = (await res.json().catch(() => ({}))) as { message?: string };
         return { ok: false, reason: body.message || `Pairing status failed (${res.status}). Create a new code in the dashboard.` };
       }
-      status = (await res.json()) as StatusResponse;
+      const body: unknown = await res.json();
+      // A 200 with a body that is not a status object (null, a string, a
+      // proxy's HTML-as-JSON) is as transient as a dropped connection.
+      if (!body || typeof body !== "object" || typeof (body as StatusResponse).status !== "string") continue;
+      status = body as StatusResponse;
     } catch {
-      continue; // transient network error: keep polling until the deadline
+      continue; // transient network error or non-JSON body: keep polling until the deadline
     }
     if (status.pollEveryMs) every = Math.max(1000, status.pollEveryMs);
     opts.onStatus?.(status.status);

@@ -52,3 +52,19 @@ test("a transient 5xx keeps polling and a later approval still succeeds", async 
   assert.equal(result.workspace, "Acme");
   assert.equal(calls.filter((c) => c.url.includes("/status")).length, 2);
 });
+
+test("a 200 whose body is not a status object is transient, not a crash", async () => {
+  const calls: Call[] = [];
+  process.env.FORMWARD_CREDENTIALS_FILE = `${process.env.TEMP || process.env.TMPDIR || "/tmp"}/formward-pair-test-null-${process.pid}.json`;
+  const f = fakeFetch(
+    {
+      "https://app.test/api/agent-pairing/claim": () => Response.json(CLAIM, { status: 201 }),
+      "https://app.test/api/agent-pairing/status": (_init, n) =>
+        n === 1 ? Response.json(null) : n === 2 ? Response.json("approved") : Response.json({ status: "approved", apiKey: "fwk_live_test" }),
+    },
+    calls,
+  );
+  const result = await pair({ api: "https://app.test", code: "ABCD-EFGH", agentName: "t", fetchImpl: f, sleep: noSleep });
+  assert.equal(result.ok, true);
+  assert.equal(calls.filter((c) => c.url.includes("/status")).length, 3);
+});
