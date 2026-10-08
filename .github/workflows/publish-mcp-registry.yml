@@ -1,0 +1,48 @@
+# Publishes server.json to the Official MCP Registry (registry.modelcontextprotocol.io).
+# Runs in the public repo github.com/Formward/formward-mcp, where this file sits at
+# the repository root after the monorepo sync; GitHub ignores it inside mcp-server/.
+#
+# Order matters: `npm publish` of the same version must happen first (an owner
+# action, 2FA), because the registry proves package ownership by reading
+# `mcpName` from the package.json that npm serves for that exact version.
+# Authentication is GitHub OIDC, which grants io.github.<repo owner>/* with no
+# token or browser login.
+name: Publish to MCP Registry
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check that server.json matches the npm release
+        run: |
+          set -eu
+          NAME=$(node -p "require('./server.json').name")
+          VERSION=$(node -p "require('./server.json').version")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          PKG_MCPNAME=$(node -p "require('./package.json').mcpName")
+          [ "$VERSION" = "$PKG_VERSION" ] || { echo "server.json version $VERSION differs from package.json $PKG_VERSION"; exit 1; }
+          [ "$NAME" = "$PKG_MCPNAME" ] || { echo "server.json name $NAME differs from package.json mcpName $PKG_MCPNAME"; exit 1; }
+          PUBLISHED=$(npm view "@formward/mcp@$VERSION" mcpName 2>/dev/null || true)
+          [ "$PUBLISHED" = "$NAME" ] || { echo "@formward/mcp@$VERSION with mcpName $NAME is not on npm yet; run npm publish first"; exit 1; }
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish

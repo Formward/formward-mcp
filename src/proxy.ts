@@ -227,11 +227,15 @@ function safeJson(text: string): unknown {
   }
 }
 
-/** A well-formed JSON-RPC 2.0 request or notification (the backend validates forwarded ones; local handling must too). */
+/**
+ * A well-formed JSON-RPC 2.0 request or notification (the backend validates
+ * forwarded ones; local handling must too). `params` may be an object or an
+ * array, as JSON-RPC allows; the backend treats an array as no parameters.
+ */
 function isValidRequest(msg: JsonRpcMessage): boolean {
   if (msg.jsonrpc !== "2.0" || typeof msg.method !== "string") return false;
   if (msg.id !== undefined && msg.id !== null && typeof msg.id !== "string" && typeof msg.id !== "number") return false;
-  return msg.params === undefined || (typeof msg.params === "object" && msg.params !== null && !Array.isArray(msg.params));
+  return msg.params === undefined || (typeof msg.params === "object" && msg.params !== null);
 }
 
 /** One message: local tool, or forwarded with the local tool spliced into tools/list. */

@@ -1,6 +1,7 @@
 {
   "name": "@formward/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "mcpName": "io.github.Formward/formward-mcp",
   "description": "MCP server and pairing CLI for Formward: let your coding agent create forms, fetch the snippet and verify a test submission against your Formward workspace.",
   "license": "MIT",
   "homepage": "https://formward.eu/agents",

@@ -132,6 +132,15 @@ test("valid JSON that is not a request is an invalid request, not a parse error"
   }
 });
 
+test("positional (array) params are a valid request and are forwarded", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => Response.json({ jsonrpc: "2.0", id: 16, result: {} }) }, calls);
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 16, method: "ping", params: [] }), deps(f))) as JsonRpcMessage;
+  assert.equal(calls.length, 1);
+  assert.equal(reply.error, undefined);
+  assert.deepEqual(reply.result, {});
+});
+
 /** The remote MCP endpoint answering list_forms with the given forms (how the real server responds). */
 function listFormsRoute(forms: { id: string; name: string; endpoint: string }[]) {
   return (init?: RequestInit) => {
