@@ -80,23 +80,32 @@ function toolResult(id: JsonRpcMessage["id"], text: string, isError = false): Js
   return { jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text }], isError } };
 }
 
+export type ParsedLine =
+  | { kind: "empty" }
+  | { kind: "parse_error" }
+  | { kind: "invalid" }
+  | { kind: "message"; message: JsonRpcMessage }
+  | { kind: "batch"; messages: unknown[] };
+
 /**
  * Parse one stdio line. Malformed JSON is a parse error (-32700); valid JSON
  * that is not an object or array (null, a number, a string) is a valid parse
  * but an invalid request (-32600), as the JSON-RPC spec distinguishes them.
+ * Outcomes are a tagged result, never synthetic method names: JSON-RPC
+ * reserves only the `rpc.` prefix, so any other method string is legal.
  */
-export function parseLine(line: string): JsonRpcMessage | JsonRpcMessage[] | null {
+export function parseLine(line: string): ParsedLine {
   const trimmed = line.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return { kind: "empty" };
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    return { id: null, method: "__parse_error__" };
+    return { kind: "parse_error" };
   }
-  if (Array.isArray(parsed)) return parsed as JsonRpcMessage[];
-  if (parsed && typeof parsed === "object") return parsed as JsonRpcMessage;
-  return { id: null, method: "__invalid_request__" };
+  if (Array.isArray(parsed)) return { kind: "batch", messages: parsed };
+  if (parsed && typeof parsed === "object") return { kind: "message", message: parsed as JsonRpcMessage };
+  return { kind: "invalid" };
 }
 
 /** Forward one message to the remote MCP endpoint. Returns null when there is nothing to write (notification). */
@@ -370,15 +379,23 @@ async function handleOne(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcM
  * it too) and answered as a batch of the non-notification replies.
  */
 export async function handleLine(line: string, deps: ProxyDeps): Promise<JsonRpcMessage | JsonRpcMessage[] | null> {
-  const msg = parseLine(line);
-  if (msg === null) return null;
-  if (Array.isArray(msg)) {
-    if (msg.length === 0) return rpcError(null, "Invalid Request", -32600);
-    const replies = await Promise.all(msg.map((m) => (m && typeof m === "object" ? handleOne(m, deps) : Promise.resolve(rpcError(null, "Invalid Request", -32600)))));
-    const out = replies.filter((r): r is JsonRpcMessage => r !== null);
-    return out.length > 0 ? out : null;
+  const parsed = parseLine(line);
+  switch (parsed.kind) {
+    case "empty":
+      return null;
+    case "parse_error":
+      return rpcError(null, "Parse error", -32700);
+    case "invalid":
+      return rpcError(null, "Invalid Request", -32600);
+    case "batch": {
+      if (parsed.messages.length === 0) return rpcError(null, "Invalid Request", -32600);
+      const replies = await Promise.all(
+        parsed.messages.map((m) => (m && typeof m === "object" && !Array.isArray(m) ? handleOne(m as JsonRpcMessage, deps) : Promise.resolve(rpcError(null, "Invalid Request", -32600)))),
+      );
+      const out = replies.filter((r): r is JsonRpcMessage => r !== null);
+      return out.length > 0 ? out : null;
+    }
+    case "message":
+      return handleOne(parsed.message, deps);
   }
-  if (msg.method === "__parse_error__") return rpcError(null, "Parse error", -32700);
-  if (msg.method === "__invalid_request__") return rpcError(null, "Invalid Request", -32600);
-  return handleOne(msg, deps);
 }

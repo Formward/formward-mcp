@@ -404,3 +404,14 @@ test("an upstream error with id null is not accepted for a request that had an i
   assert.equal(reply.id, 62);
   assert.match((reply.error as { message: string }).message, /malformed JSON-RPC response/);
 });
+
+test("method names that look like parser sentinels are ordinary methods", async () => {
+  for (const method of ["__parse_error__", "__invalid_request__"]) {
+    const calls: Call[] = [];
+    const f = fakeFetch({ "https://app.test/api/v1/mcp": (init) => Response.json({ jsonrpc: "2.0", id: (JSON.parse(String(init?.body)) as JsonRpcMessage).id, result: { method } }) }, calls);
+    const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 70, method }), deps(f))) as JsonRpcMessage;
+    assert.deepEqual(reply.result, { method });
+    assert.equal(await handleLine(JSON.stringify({ jsonrpc: "2.0", method }), deps(f)), null);
+    assert.equal(calls.length, 2);
+  }
+});

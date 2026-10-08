@@ -122,6 +122,11 @@ async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> 
       const handle = await fs.open(lock, "wx");
       await handle.writeFile(token);
       await handle.close();
+      // Between open() and the token write the lock was empty, and an empty
+      // lock may be taken over as abandoned (below). Confirm the lock on disk
+      // still carries this token before trusting it; otherwise it was taken
+      // from us while we stalled, and we go back to waiting.
+      if ((await fs.readFile(lock, "utf8").catch(() => "")) !== token) continue;
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
