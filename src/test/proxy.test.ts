@@ -51,6 +51,23 @@ test("an API auth failure becomes a JSON-RPC error that tells the agent to pair 
   assert.match(err.message, /pair <code>/);
 });
 
+test("an empty-bodied failure still gets an RPC error and non-ASCII agent names never reach a header", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response(null, { status: 502, statusText: "Bad Gateway" }) }, calls);
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 11, method: "tools/list" }), {
+    ...deps(f),
+    agentName: "Émilie's agent 🚀\r\nX-Injected: 1",
+  })) as JsonRpcMessage;
+  assert.equal(reply.id, 11);
+  assert.match((reply.error as { message: string }).message, /502/);
+  const ua = (calls[0].init?.headers as Record<string, string>)["user-agent"];
+  assert.match(ua, /^formward-mcp \([\x20-\x7e]+\)$/);
+  assert.ok(!ua.includes("\n"));
+  // A successful empty reply (notification accepted) stays silent.
+  const quiet = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response(null, { status: 200 }) }, []);
+  assert.equal(await handleLine(JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled" }), deps(quiet)), null);
+});
+
 test("malformed input is answered with a parse error", async () => {
   const reply = (await handleLine("{not json", deps(fakeFetch({}, [])))) as JsonRpcMessage;
   assert.deepEqual(reply.error, { code: -32700, message: "Parse error" });

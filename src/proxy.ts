@@ -41,6 +41,15 @@ export const TEST_TOOL = {
   },
 };
 
+/**
+ * The display name goes to the server as JSON when pairing; in headers it has
+ * to be a plain ASCII token or Node's fetch refuses to build the request.
+ */
+export function headerSafeName(name: string): string {
+  const cleaned = name.replace(/[^\x20-\x7e]/g, "").replace(/[()\\]/g, "").trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 80) : "agent";
+}
+
 function rpcError(id: JsonRpcMessage["id"], message: string, code = -32000): JsonRpcMessage {
   return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
 }
@@ -76,7 +85,7 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<Jso
         authorization: `Bearer ${deps.apiKey}`,
         "content-type": "application/json",
         accept: "application/json",
-        "user-agent": `formward-mcp (${deps.agentName})`,
+        "user-agent": `formward-mcp (${headerSafeName(deps.agentName)})`,
       },
       body: JSON.stringify(msg),
     });
@@ -87,10 +96,11 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<Jso
     if (isNotification) return null;
     return rpcError(id, `Could not reach ${deps.api}: ${e instanceof Error ? e.message : String(e)}`);
   }
-  if (res.status === 202 || !text) return null;
+  // A failure is answered even when its body is empty (a proxy's bare 401/502):
+  // only a successful empty reply means "notification accepted".
   if (!res.ok) {
     if (isNotification) return null;
-    let detail = text;
+    let detail = text || res.statusText || "empty response";
     try {
       const body = JSON.parse(text) as { error?: { message?: string; code?: string } };
       detail = body.error?.message ?? text;
@@ -100,6 +110,7 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<Jso
     }
     return rpcError(id, `Formward API ${res.status}: ${detail}`);
   }
+  if (res.status === 202 || !text) return null;
   try {
     return JSON.parse(text) as JsonRpcMessage;
   } catch {
@@ -163,16 +174,17 @@ export async function sendTestSubmission(args: Record<string, unknown>, deps: Pr
 
   const f = deps.fetchImpl ?? fetch;
   let res: Response;
+  let text: string;
   try {
     res = await f(found.endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json", "user-agent": `formward-mcp (${deps.agentName})` },
+      headers: { "content-type": "application/json", accept: "application/json", "user-agent": `formward-mcp (${headerSafeName(deps.agentName)})` },
       body: JSON.stringify(payload),
     });
+    text = await res.text();
   } catch (e) {
     return { text: `Could not reach ${found.endpoint}: ${e instanceof Error ? e.message : String(e)}`, isError: true };
   }
-  const text = await res.text();
   const summary = {
     endpoint: found.endpoint,
     status: res.status,
