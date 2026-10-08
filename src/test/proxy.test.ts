@@ -56,11 +56,21 @@ test("malformed input is answered with a parse error", async () => {
   assert.deepEqual(reply.error, { code: -32700, message: "Parse error" });
 });
 
-test("send_test_submission posts JSON to the form's endpoint and strips underscore fields", async () => {
+/** The remote MCP endpoint answering list_forms with the given forms (how the real server responds). */
+function listFormsRoute(forms: { id: string; name: string; endpoint: string }[]) {
+  return (init?: RequestInit) => {
+    const msg = JSON.parse(String(init?.body)) as JsonRpcMessage;
+    assert.equal(msg.method, "tools/call");
+    assert.equal((msg.params as { name: string }).name, "list_forms");
+    return Response.json({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: JSON.stringify({ data: forms }) }], isError: false } });
+  };
+}
+
+test("send_test_submission resolves the endpoint via list_forms, posts JSON and keeps consent but not honeypot/redirect", async () => {
   const calls: Call[] = [];
   const f = fakeFetch(
     {
-      "https://app.test/api/v1/forms": () => Response.json({ data: [{ id: "f1", name: "Contact", endpoint: "https://forms.test/f/f1" }] }),
+      "https://app.test/api/v1/mcp": listFormsRoute([{ id: "f1", name: "Contact", endpoint: "https://forms.test/f/f1" }]),
       "https://forms.test/f/f1": () => Response.json({ ok: true, id: "sub-1" }),
     },
     calls,
@@ -70,24 +80,40 @@ test("send_test_submission posts JSON to the form's endpoint and strips undersco
       jsonrpc: "2.0",
       id: 3,
       method: "tools/call",
-      params: { name: TEST_TOOL.name, arguments: { formId: "f1", values: { email: "a@b.se", message: "hi", _gotcha: "bot", _next: "https://x" } } },
+      params: {
+        name: TEST_TOOL.name,
+        arguments: { formId: "f1", values: { email: "a@b.se", message: "hi", _consent: "on", _subject: "Test", _gotcha: "bot", _next: "https://x", _redirect: "https://y" } },
+      },
     }),
     deps(f),
   )) as JsonRpcMessage;
+  // Only the MCP endpoint was used for the lookup, never the plan-gated REST list.
+  assert.ok(calls.every((c) => !c.url.includes("/api/v1/forms")));
   const post = calls.find((c) => c.url === "https://forms.test/f/f1")!;
   const sent = JSON.parse(String(post.init?.body)) as Record<string, unknown>;
-  assert.deepEqual(sent, { email: "a@b.se", message: "hi" });
+  assert.deepEqual(sent, { email: "a@b.se", message: "hi", _consent: "on", _subject: "Test" });
   assert.equal((post.init?.headers as Record<string, string>).accept, "application/json");
   const result = reply.result as { isError: boolean; content: { text: string }[] };
   assert.equal(result.isError, false);
   const summary = JSON.parse(result.content[0].text) as { status: number; sent: string[] };
   assert.equal(summary.status, 200);
-  assert.deepEqual(summary.sent, ["email", "message"]);
+  assert.deepEqual(summary.sent, ["email", "message", "_consent", "_subject"]);
+});
+
+test("send_test_submission surfaces a failed lookup as a tool error", async () => {
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => { throw new TypeError("fetch failed"); } }, []);
+  const reply = (await handleLine(
+    JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId: "f1" } } }),
+    deps(f),
+  )) as JsonRpcMessage;
+  const result = reply.result as { isError: boolean; content: { text: string }[] };
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Could not (list forms|reach)/);
 });
 
 test("send_test_submission refuses an unknown form without touching any endpoint", async () => {
   const calls: Call[] = [];
-  const f = fakeFetch({ "https://app.test/api/v1/forms": () => Response.json({ data: [] }) }, calls);
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": listFormsRoute([]) }, calls);
   const reply = (await handleLine(
     JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId: "nope" } } }),
     deps(f),

@@ -28,7 +28,8 @@ export const TEST_TOOL = {
     "Send one test submission to a form's endpoint from this machine, exactly like the website will " +
     "(JSON body, Accept: application/json). Counts as one submission against the plan. Then call " +
     "get_form_stats to confirm it arrived; the dashboard shows the content. Pass `values` matching the " +
-    "form's fields, or omit it for name/email/message defaults.",
+    "form's fields (include `_consent: \"on\"` for consent-gated forms), or omit it for name/email/message " +
+    "defaults. The honeypot and redirect controls are always stripped.",
   inputSchema: {
     type: "object",
     properties: {
@@ -108,20 +109,31 @@ interface FormListItem {
   endpoint: string;
 }
 
+/**
+ * Resolve the form's endpoint through the MCP endpoint's own list_forms tool,
+ * so it works for every key that can use this server at all (a paired key on
+ * the Free plan included) and never depends on the plain REST API's plan gate.
+ */
 async function lookupEndpoint(formId: string, deps: ProxyDeps): Promise<FormListItem | { error: string }> {
-  const f = deps.fetchImpl ?? fetch;
-  let body: { data?: FormListItem[] };
+  let reply: JsonRpcMessage | JsonRpcMessage[] | null;
   try {
-    const res = await f(`${deps.api}/api/v1/forms`, {
-      headers: { authorization: `Bearer ${deps.apiKey}`, accept: "application/json", "user-agent": `formward-mcp (${deps.agentName})` },
-    });
-    if (!res.ok) return { error: `Could not list forms (${res.status}).` };
-    body = (await res.json()) as { data?: FormListItem[] };
+    reply = await forward({ jsonrpc: "2.0", id: "lookup", method: "tools/call", params: { name: "list_forms", arguments: {} } }, deps);
   } catch (e) {
     // Network or decoding failure is a tool error, never an unhandled rejection
     // that would take the stdio session down with it.
     return { error: `Could not list forms: ${e instanceof Error ? e.message : String(e)}` };
   }
+  if (!reply || Array.isArray(reply)) return { error: "Could not list forms: empty response." };
+  if (reply.error) return { error: `Could not list forms: ${(reply.error as { message?: string }).message ?? "error"}` };
+  const result = reply.result as { content?: { type: string; text?: string }[]; isError?: boolean } | undefined;
+  const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+  let body: { data?: FormListItem[] };
+  try {
+    body = JSON.parse(text) as { data?: FormListItem[] };
+  } catch {
+    return { error: `Could not list forms: ${result?.isError ? text.slice(0, 300) : "unexpected response"}` };
+  }
+  if (result?.isError) return { error: `Could not list forms: ${text.slice(0, 300)}` };
   const form = Array.isArray(body?.data) ? body.data.find((item) => item.id === formId) : undefined;
   return form ?? { error: `No form ${formId} in this workspace. Call list_forms first.` };
 }
@@ -140,9 +152,10 @@ export async function sendTestSubmission(args: Record<string, unknown>, deps: Pr
   };
   const given = args.values && typeof args.values === "object" && !Array.isArray(args.values) ? (args.values as Record<string, unknown>) : null;
   const payload: Record<string, unknown> = given && Object.keys(given).length > 0 ? { ...given } : { ...defaults };
-  for (const key of Object.keys(payload)) {
-    if (key.startsWith("_")) delete payload[key]; // never let a test fill the honeypot or redirect fields
-  }
+  // A test must never trip the honeypot or redirect anywhere. Other control
+  // fields (_consent for consent-gated forms, _subject, _replyto) stay, so a
+  // test can mirror what the real form sends.
+  for (const key of ["_gotcha", "_redirect", "_next"]) delete payload[key];
 
   const f = deps.fetchImpl ?? fetch;
   let res: Response;
