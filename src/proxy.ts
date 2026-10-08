@@ -6,6 +6,8 @@
  * the way the customer's website will.
  */
 
+import tools from "./tools.json";
+
 export interface JsonRpcMessage {
   jsonrpc?: string;
   id?: string | number | null;
@@ -17,10 +19,21 @@ export interface JsonRpcMessage {
 
 export interface ProxyDeps {
   api: string;
-  apiKey: string;
+  /** null until the user has paired (or set FORMWARD_API_KEY): see handleUnpaired. */
+  apiKey: string | null;
   agentName: string;
   fetchImpl?: typeof fetch;
 }
+
+const PKG_VERSION = (require("../package.json") as { version: string }).version;
+
+/** Protocol revisions the backend speaks, newest first (mirrors the server). */
+const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
+export const UNPAIRED_INSTRUCTIONS =
+  "Formward is not paired on this machine yet, so every tool call answers with these instructions. " +
+  "Ask the workspace owner for a pairing code (Formward dashboard > Connected agents), run " +
+  "`npx @formward/mcp pair <CODE>` in a terminal, then restart this MCP server.";
 
 /** Upper bound for one HTTP round trip, so a stalled connection becomes an error instead of a hung request. */
 export const REQUEST_TIMEOUT_MS = 30_000;
@@ -238,6 +251,43 @@ function isValidRequest(msg: JsonRpcMessage): boolean {
   return msg.params === undefined || (typeof msg.params === "object" && msg.params !== null);
 }
 
+/**
+ * Without a key the server still speaks MCP: a client can register it before
+ * pairing, directory checks can introspect it, and a coding agent that calls
+ * a tool gets told how to pair instead of a dead process. The tool list is a
+ * built-in copy of the backend's (kept equal by a test in the monorepo), so
+ * nothing here touches the network.
+ */
+function handleUnpaired(msg: JsonRpcMessage): JsonRpcMessage | null {
+  const id = msg.id;
+  const method = msg.method ?? "";
+  if (method.startsWith("notifications/")) return null;
+  if (id === undefined) return null;
+  switch (method) {
+    case "initialize": {
+      const asked = typeof msg.params?.protocolVersion === "string" ? msg.params.protocolVersion : "";
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name: "formward", version: PKG_VERSION },
+          instructions: UNPAIRED_INSTRUCTIONS,
+        },
+      };
+    }
+    case "ping":
+      return { jsonrpc: "2.0", id, result: {} };
+    case "tools/list":
+      return { jsonrpc: "2.0", id, result: { tools: [...tools, TEST_TOOL] } };
+    case "tools/call":
+      return toolResult(id, UNPAIRED_INSTRUCTIONS, true);
+    default:
+      return rpcError(id, `Method not found: ${method}`, -32601);
+  }
+}
+
 /** One message: local tool, or forwarded with the local tool spliced into tools/list. */
 async function handleOne(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcMessage | null> {
   // Only a well-formed notification is silent; a malformed object without an
@@ -247,6 +297,7 @@ async function handleOne(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcM
     const id = typeof msg.id === "string" || typeof msg.id === "number" ? msg.id : null;
     return rpcError(id, "Invalid Request", -32600);
   }
+  if (deps.apiKey === null) return handleUnpaired(msg);
   if (msg.method === "tools/call" && msg.params?.name === TEST_TOOL.name) {
     const args = (msg.params.arguments ?? {}) as Record<string, unknown>;
     const out = await sendTestSubmission(args, deps);

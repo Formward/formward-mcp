@@ -96,18 +96,18 @@ async function cmdLogout(args: string[]): Promise<number> {
 
 async function cmdServe(args: string[]): Promise<number> {
   const api = apiUrl(flag(args, "--api"));
-  const key = await resolveApiKey(api);
+  // Unpaired or expired: keep serving. The MCP client still gets the tool list
+  // and every call answers with the pairing instructions (see handleUnpaired).
+  let key = await resolveApiKey(api);
   if (!key) {
     process.stderr.write(
-      `formward-mcp: no key for ${api}. Ask the workspace owner for a pairing code (Dashboard > Connected agents) and run:\n  npx @formward/mcp pair <CODE>\n`,
+      `formward-mcp: not paired with ${api}. Ask the workspace owner for a pairing code (Dashboard > Connected agents) and run:\n  npx @formward/mcp pair <CODE>\n`,
     );
-    return 1;
-  }
-  if (key.expiresAt && new Date(key.expiresAt).getTime() < Date.now()) {
+  } else if (key.expiresAt && new Date(key.expiresAt).getTime() < Date.now()) {
     process.stderr.write(`formward-mcp: the paired key expired on ${key.expiresAt}. Pair again with a fresh code.\n`);
-    return 1;
+    key = null;
   }
-  const deps = { api, apiKey: key.apiKey, agentName: flag(args, "--name") ?? defaultAgentName() };
+  const deps = { api, apiKey: key ? key.apiKey : null, agentName: flag(args, "--name") ?? defaultAgentName() };
 
   // MCP stdio transport: newline-delimited JSON, one message per line, stdout
   // carries nothing but protocol messages. Replies are written in order.

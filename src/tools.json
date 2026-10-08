@@ -1,0 +1,87 @@
+[
+  {
+    "name": "list_forms",
+    "description": "List the forms in this workspace with their endpoint URLs and hosted page URLs. No submission data.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "list_templates",
+    "description": "Form templates (contact, feedback, registration, ...) with their field lists. Pass a template slug to create_form to start from one.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": ["application", "contact", "donation", "feedback", "order", "registration", "request", "signup"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "create_form",
+    "description": "Create a form. Returns the endpoint URL to POST submissions to. The notification address gets a verification email automatically; notifications are held until the owner confirms it. Pass either `fields` (array of {name,label,type,required}) or a `template` slug, or neither for name/email/message.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "orgId": {
+          "type": "string",
+          "description": "Workspace id. A paired agent key defaults to its own workspace and may omit this; a classic API key must pass one of the orgId values that list_forms returns."
+        },
+        "name": { "type": "string", "description": "Shown in the dashboard, e.g. 'Website contact'." },
+        "notifyEmail": { "type": "string", "description": "Where submission notifications go." },
+        "template": { "type": "string", "description": "Template slug from list_templates." },
+        "fields": { "type": "array", "items": { "type": "object" }, "description": "Explicit field definitions." },
+        "hosted": { "type": "boolean", "description": "Also publish a hosted page at formward.eu/s/... (no code needed)." },
+        "successMessage": { "type": "string" },
+        "redirectUrl": { "type": "string", "description": "Thank-you page after a classic POST." },
+        "allowedOrigins": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Site origins allowed to submit, e.g. https://example.com."
+        }
+      },
+      "required": ["name", "notifyEmail"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_form_snippet",
+    "description": "Paste-ready form markup for one form with its real endpoint. tech is one of: html, react, tailwind, shopify, webflow, vue, svelte, astro, nextjs, nuxt.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "formId": { "type": "string" },
+        "tech": { "type": "string", "enum": ["html", "react", "tailwind", "shopify", "webflow", "vue", "svelte", "astro", "nextjs", "nuxt"] }
+      },
+      "required": ["formId"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_form_stats",
+    "description": "Submission counts and the time of the latest submission for a form. Use after sending a test to confirm it arrived. Never returns submission content.",
+    "inputSchema": { "type": "object", "properties": { "formId": { "type": "string" } }, "required": ["formId"], "additionalProperties": false }
+  },
+  {
+    "name": "list_webhooks",
+    "description": "Webhook destinations configured on a form (no secrets).",
+    "inputSchema": { "type": "object", "properties": { "formId": { "type": "string" } }, "required": ["formId"], "additionalProperties": false }
+  },
+  {
+    "name": "add_webhook",
+    "description": "Add a webhook (generic, Slack or Discord) that fires on each submission. Professional plan and above; https URLs to public hosts only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "formId": { "type": "string" },
+        "url": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "description": "generic (default), slack or discord." },
+        "secret": { "type": "string", "description": "Optional HMAC signing secret for generic webhooks." }
+      },
+      "required": ["formId", "url"],
+      "additionalProperties": false
+    }
+  }
+]

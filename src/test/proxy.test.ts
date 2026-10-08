@@ -141,6 +141,38 @@ test("positional (array) params are a valid request and are forwarded", async ()
   assert.deepEqual(reply.result, {});
 });
 
+test("unpaired: initialize, ping and tools/list are answered locally and nothing is sent", async () => {
+  const calls: Call[] = [];
+  const d = { ...deps(fakeFetch({}, calls)), apiKey: null };
+  const init = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 20, method: "initialize", params: { protocolVersion: "2025-03-26" } }), d)) as JsonRpcMessage;
+  const result = init.result as { protocolVersion: string; serverInfo: { name: string; version: string }; instructions: string };
+  assert.equal(result.protocolVersion, "2025-03-26");
+  assert.equal(result.serverInfo.name, "formward");
+  assert.match(result.serverInfo.version, /^\d+\.\d+\.\d+/);
+  assert.match(result.instructions, /pair <CODE>/);
+  assert.equal(await handleLine(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }), d), null);
+  const ping = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 21, method: "ping" }), d)) as JsonRpcMessage;
+  assert.deepEqual(ping.result, {});
+  const list = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 22, method: "tools/list" }), d)) as JsonRpcMessage;
+  const names = (list.result as { tools: { name: string; inputSchema: unknown }[] }).tools.map((t) => t.name);
+  assert.ok(names.includes("list_forms") && names.includes("create_form"));
+  assert.equal(names[names.length - 1], TEST_TOOL.name);
+  assert.equal(calls.length, 0);
+});
+
+test("unpaired: a tool call returns the pairing instructions as a tool error, unknown methods are not found", async () => {
+  const calls: Call[] = [];
+  const d = { ...deps(fakeFetch({}, calls)), apiKey: null };
+  const line = JSON.stringify({ jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "list_forms", arguments: {} } });
+  const reply = (await handleLine(line, d)) as JsonRpcMessage;
+  const result = reply.result as { isError: boolean; content: { text: string }[] };
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /npx @formward\/mcp pair <CODE>/);
+  const other = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 24, method: "resources/list" }), d)) as JsonRpcMessage;
+  assert.equal((other.error as { code: number }).code, -32601);
+  assert.equal(calls.length, 0);
+});
+
 /** The remote MCP endpoint answering list_forms with the given forms (how the real server responds). */
 function listFormsRoute(forms: { id: string; name: string; endpoint: string }[]) {
   return (init?: RequestInit) => {

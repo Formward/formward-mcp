@@ -40,6 +40,8 @@ The key lives for 30 days and can be revoked in the dashboard at any time. Pairi
 
 The agent never sees submission content. After a test it checks the count with `get_form_stats`; you read the message in the dashboard.
 
+Before pairing, the server still starts: it answers `initialize` and `tools/list` from a built-in copy of the tool list, and every tool call returns the pairing instructions. So you can register it in your agent first and pair when the owner has a code ready.
+
 ## Commands
 
 ```
@@ -65,6 +67,8 @@ No dependencies beyond Node.js 18.17 or newer.
 npm install
 npm test
 ```
+
+A Dockerfile is included for directory checks: `docker build -t formward-mcp . && docker run -i --rm formward-mcp`.
 
 ## License
 
