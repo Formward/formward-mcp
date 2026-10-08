@@ -68,20 +68,59 @@ async function writeAll(file: string, all: CredentialFile): Promise<void> {
   }
 }
 
+/**
+ * One read-modify-write at a time across processes: two `pair` runs for
+ * different origins would otherwise both read the same snapshot and the
+ * last rename would drop the other's key. The lock is a file created with
+ * O_EXCL next to the store; a lock older than 10 s is from a crashed process
+ * and is taken over.
+ */
+async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    try {
+      const handle = await fs.open(lock, "wx");
+      await handle.close();
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      const age = await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
+      if (age > 10_000) {
+        await fs.rm(lock, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error(`Credentials file is locked by another formward-mcp process (${lock}).`);
+      await new Promise((r) => setTimeout(r, 25 + Math.random() * 50));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await fs.rm(lock, { force: true });
+  }
+}
+
 export async function saveCredential(api: string, cred: StoredCredential): Promise<string> {
   const file = credentialsPath();
-  const all = await readAll();
-  all[api] = cred;
-  await writeAll(file, all);
+  await withStoreLock(file, async () => {
+    const all = await readAll();
+    all[api] = cred;
+    await writeAll(file, all);
+  });
   return file;
 }
 
 export async function removeCredential(api: string): Promise<boolean> {
-  const all = await readAll();
-  if (!all[api]) return false;
-  delete all[api];
-  await writeAll(credentialsPath(), all);
-  return true;
+  const file = credentialsPath();
+  return withStoreLock(file, async () => {
+    const all = await readAll();
+    if (!all[api]) return false;
+    delete all[api];
+    await writeAll(file, all);
+    return true;
+  });
 }
 
 /**

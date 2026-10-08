@@ -347,3 +347,27 @@ test("an unpaired server picks up a key stored after it started", async () => {
   assert.equal(calls.length, 1);
   assert.equal((calls[0].init?.headers as Record<string, string>).authorization, "Bearer fwk_live_x");
 });
+
+test("every element of a batch sent with a stale key is retried with the fresh one", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch(
+    {
+      "https://app.test/api/v1/mcp": (init) => {
+        const msg = JSON.parse(String(init?.body)) as JsonRpcMessage;
+        return (init?.headers as Record<string, string>).authorization === "Bearer fwk_new"
+          ? Response.json({ jsonrpc: "2.0", id: msg.id, result: {} })
+          : new Response("Unauthorized", { status: 401 });
+      },
+    },
+    calls,
+  );
+  const d = { ...deps(f), reloadKey: async () => "fwk_new" };
+  const batch = JSON.stringify([
+    { jsonrpc: "2.0", id: 50, method: "ping" },
+    { jsonrpc: "2.0", id: 51, method: "ping" },
+    { jsonrpc: "2.0", id: 52, method: "ping" },
+  ]);
+  const replies = (await handleLine(batch, d)) as JsonRpcMessage[];
+  assert.deepEqual(replies.map((r) => [r.id, r.error === undefined]), [[50, true], [51, true], [52, true]]);
+  assert.equal(calls.length, 6);
+});

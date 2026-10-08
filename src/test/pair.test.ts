@@ -87,3 +87,16 @@ test("the credential store is replaced whole, keeps other origins and leaves no 
   assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("concurrent saves for different origins both survive", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { loadCredential, saveCredential } = await import("../config");
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-race-"));
+  process.env.FORMWARD_CREDENTIALS_FILE = path.join(dir, "credentials.json");
+  const cred = (apiKey: string) => ({ apiKey, workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" });
+  await Promise.all(["a", "b", "c", "d"].map((n) => saveCredential(`https://${n}.test`, cred(`fwk_${n}`))));
+  for (const n of ["a", "b", "c", "d"]) assert.equal((await loadCredential(`https://${n}.test`))?.apiKey, `fwk_${n}`);
+  assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

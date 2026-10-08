@@ -104,13 +104,17 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps, retried = fa
   const f = deps.fetchImpl ?? fetch;
   const id = msg.id;
   const isNotification = msg.id === undefined;
+  // The key this request goes out with. Batch elements run concurrently, so
+  // by the time a 401 comes back another element may already have reloaded
+  // deps.apiKey; the retry decision compares against what THIS request used.
+  const usedKey = deps.apiKey;
   let res: Response;
   let text: string;
   try {
     res = await f(`${deps.api}/api/v1/mcp`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${deps.apiKey}`,
+        authorization: `Bearer ${usedKey}`,
         "content-type": "application/json",
         accept: "application/json",
         "user-agent": `formward-mcp (${headerSafeName(deps.agentName)})`,
@@ -132,7 +136,7 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps, retried = fa
     // started: retry once with the stored key if it changed.
     if (res.status === 401 && !retried && deps.reloadKey) {
       const fresh = await deps.reloadKey();
-      if (fresh && fresh !== deps.apiKey) {
+      if (fresh && fresh !== usedKey) {
         deps.apiKey = fresh;
         return forward(msg, deps, true);
       }
