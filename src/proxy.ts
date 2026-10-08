@@ -22,6 +22,9 @@ export interface ProxyDeps {
   fetchImpl?: typeof fetch;
 }
 
+/** Upper bound for one HTTP round trip, so a stalled connection becomes an error instead of a hung request. */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
 export const TEST_TOOL = {
   name: "send_test_submission",
   description:
@@ -94,6 +97,7 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<Jso
         "user-agent": `formward-mcp (${headerSafeName(deps.agentName)})`,
       },
       body: JSON.stringify(msg),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     // The body read can fail after fetch() resolved (connection dropped mid
     // response); that is the same per-request error as an unreachable host.
@@ -117,7 +121,11 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<Jso
     if (res.status === 401) detail += " The paired key may have expired or been revoked: run `npx @formward/mcp pair <code>` with a fresh code from the dashboard.";
     return rpcError(id, `Formward API ${res.status}: ${detail}`);
   }
-  if (res.status === 202 || !text) return null;
+  // A successful empty reply is right for a notification (202) and wrong for a
+  // request, which must always get an answer or the client waits for nothing.
+  if (res.status === 202 || !text) {
+    return isNotification ? null : rpcError(id, `Formward API ${res.status}: empty response to a request.`);
+  }
   try {
     return JSON.parse(text) as JsonRpcMessage;
   } catch {
@@ -188,6 +196,7 @@ export async function sendTestSubmission(args: Record<string, unknown>, deps: Pr
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json", "user-agent": `formward-mcp (${headerSafeName(deps.agentName)})` },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     text = await res.text();
   } catch (e) {
@@ -228,8 +237,12 @@ function isValidRequest(msg: JsonRpcMessage): boolean {
 /** One message: local tool, or forwarded with the local tool spliced into tools/list. */
 async function handleOne(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcMessage | null> {
   // Only a well-formed notification is silent; a malformed object without an
-  // id is still answered (with a null id), as the backend does.
-  if (!isValidRequest(msg)) return rpcError(msg.id ?? null, "Invalid Request", -32600);
+  // id is still answered (with a null id), as the backend does. An id of an
+  // invalid type is replaced by null so the error reply itself stays valid.
+  if (!isValidRequest(msg)) {
+    const id = typeof msg.id === "string" || typeof msg.id === "number" ? msg.id : null;
+    return rpcError(id, "Invalid Request", -32600);
+  }
   if (msg.method === "tools/call" && msg.params?.name === TEST_TOOL.name) {
     const args = (msg.params.arguments ?? {}) as Record<string, unknown>;
     const out = await sendTestSubmission(args, deps);

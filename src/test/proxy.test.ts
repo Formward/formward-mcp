@@ -109,6 +109,21 @@ test("malformed input is answered with a parse error", async () => {
   assert.deepEqual(reply.error, { code: -32700, message: "Parse error" });
 });
 
+test("an invalid id type is replaced by null in the error reply", async () => {
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: true, method: "ping" }), deps(fakeFetch({}, [])))) as JsonRpcMessage;
+  assert.equal(reply.id, null);
+  assert.deepEqual(reply.error, { code: -32600, message: "Invalid Request" });
+});
+
+test("a successful empty reply to a request is an error, and every proxied call carries a timeout signal", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response(null, { status: 200 }) }, calls);
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 15, method: "ping" }), deps(f))) as JsonRpcMessage;
+  assert.equal(reply.id, 15);
+  assert.match((reply.error as { message: string }).message, /empty response/);
+  assert.ok(calls[0].init?.signal instanceof AbortSignal);
+});
+
 test("valid JSON that is not a request is an invalid request, not a parse error", async () => {
   for (const line of ["null", "1", '"ping"', "true"]) {
     const reply = (await handleLine(line, deps(fakeFetch({}, [])))) as JsonRpcMessage;

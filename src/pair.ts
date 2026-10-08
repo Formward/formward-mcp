@@ -50,6 +50,7 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
   const f = opts.fetchImpl ?? fetch;
   const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const headers = { "content-type": "application/json", accept: "application/json", "user-agent": "formward-mcp" };
+  const timeout = () => AbortSignal.timeout(15_000);
 
   let claim: ClaimResponse;
   try {
@@ -57,6 +58,7 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
       method: "POST",
       headers,
       body: JSON.stringify({ code: opts.code, agent: { name: opts.agentName, host: os.hostname() } }),
+      signal: timeout(),
     });
     const body = (await res.json().catch(() => ({}))) as Partial<ClaimResponse> & { message?: string; error?: string };
     if (!res.ok || !body.pairingId || !body.pollToken) {
@@ -77,6 +79,7 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
         method: "POST",
         headers,
         body: JSON.stringify({ pairingId: claim.pairingId, pollToken: claim.pollToken }),
+        signal: timeout(),
       });
       if (res.status === 429) {
         every = Math.min(every * 2, 15000);
