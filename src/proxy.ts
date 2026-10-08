@@ -23,6 +23,12 @@ export interface ProxyDeps {
   apiKey: string | null;
   agentName: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Re-read the stored key, so a `pair` run in another terminal reaches this
+   * server without a restart (checked on every 401 and while unpaired).
+   * Absent when the key comes from FORMWARD_API_KEY, which takes precedence.
+   */
+  reloadKey?: () => Promise<string | null>;
 }
 
 const PKG_VERSION = (require("../package.json") as { version: string }).version;
@@ -94,7 +100,7 @@ export function parseLine(line: string): JsonRpcMessage | JsonRpcMessage[] | nul
 }
 
 /** Forward one message to the remote MCP endpoint. Returns null when there is nothing to write (notification). */
-export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcMessage | null> {
+export async function forward(msg: JsonRpcMessage, deps: ProxyDeps, retried = false): Promise<JsonRpcMessage | null> {
   const f = deps.fetchImpl ?? fetch;
   const id = msg.id;
   const isNotification = msg.id === undefined;
@@ -122,6 +128,15 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<Jso
   // A failure is answered even when its body is empty (a proxy's bare 401/502):
   // only a successful empty reply means "notification accepted".
   if (!res.ok) {
+    // A rejected key may have been replaced by a `pair` run since this server
+    // started: retry once with the stored key if it changed.
+    if (res.status === 401 && !retried && deps.reloadKey) {
+      const fresh = await deps.reloadKey();
+      if (fresh && fresh !== deps.apiKey) {
+        deps.apiKey = fresh;
+        return forward(msg, deps, true);
+      }
+    }
     if (isNotification) return null;
     let detail = text || res.statusText || "empty response";
     try {
@@ -131,7 +146,11 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps): Promise<Jso
       // keep raw text
     }
     // The recovery hint depends on the status, not on whether the body parsed.
-    if (res.status === 401) detail += " The paired key may have expired or been revoked: run `npx @formward/mcp pair <code>` with a fresh code from the dashboard.";
+    if (res.status === 401) {
+      detail += deps.reloadKey
+        ? " The paired key may have expired or been revoked: run `npx @formward/mcp pair <code>` with a fresh code from the dashboard; this server picks the new key up on its next request."
+        : " FORMWARD_API_KEY is set and takes precedence over a paired key: update or unset it, then restart this server.";
+    }
     return rpcError(id, `Formward API ${res.status}: ${detail}`);
   }
   // A successful empty reply is right for a notification (202) and wrong for a
@@ -300,6 +319,11 @@ async function handleOne(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcM
   if (!isValidRequest(msg)) {
     const id = typeof msg.id === "string" || typeof msg.id === "number" ? msg.id : null;
     return rpcError(id, "Invalid Request", -32600);
+  }
+  if (deps.apiKey === null && deps.reloadKey) {
+    // Pairing may have completed since this server started.
+    const fresh = await deps.reloadKey();
+    if (fresh) deps.apiKey = fresh;
   }
   if (deps.apiKey === null) return handleUnpaired(msg);
   if (msg.method === "tools/call" && msg.params?.name === TEST_TOOL.name) {

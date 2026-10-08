@@ -51,7 +51,9 @@ formward-mcp status                               paired workspace and key expir
 formward-mcp logout                               forget the stored key
 ```
 
-Environment: `FORMWARD_API_KEY` uses a key directly (CI, or a classic Professional API key), `FORMWARD_API_URL` points at another API origin, `FORMWARD_AGENT_NAME` sets the name the workspace owner sees.
+Environment: `FORMWARD_API_KEY` uses a key directly (CI, or a classic Professional API key) and takes precedence over a paired key, `FORMWARD_API_URL` points at another API origin, `FORMWARD_AGENT_NAME` sets the name the workspace owner sees.
+
+A running server re-reads the stored key when the API rejects the current one and while it is unpaired, so pairing again (or for the first time) in another terminal takes effect without a restart.
 
 Credentials are stored in `~/.config/formward/credentials.json` (`%APPDATA%\formward\credentials.json` on Windows), readable by your user only.
 

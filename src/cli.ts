@@ -107,7 +107,17 @@ async function cmdServe(args: string[]): Promise<number> {
     process.stderr.write(`formward-mcp: the paired key expired on ${key.expiresAt}. Pair again with a fresh code.\n`);
     key = null;
   }
-  const deps = { api, apiKey: key ? key.apiKey : null, agentName: flag(args, "--name") ?? defaultAgentName() };
+  // The stored key is re-read on a 401 and while unpaired, so `pair` in another
+  // terminal takes effect without a restart. An environment key is fixed.
+  const reloadKey =
+    key?.source === "env"
+      ? undefined
+      : async () => {
+          const stored = await loadCredential(api);
+          if (!stored || (stored.expiresAt && new Date(stored.expiresAt).getTime() < Date.now())) return null;
+          return stored.apiKey;
+        };
+  const deps = { api, apiKey: key ? key.apiKey : null, agentName: flag(args, "--name") ?? defaultAgentName(), reloadKey };
 
   // MCP stdio transport: newline-delimited JSON, one message per line, stdout
   // carries nothing but protocol messages. Replies are written in order.

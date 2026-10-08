@@ -44,7 +44,7 @@ test("an API auth failure becomes a JSON-RPC error that tells the agent to pair 
     { "https://app.test/api/v1/mcp": () => Response.json({ error: { code: "unauthorized", message: "Invalid or revoked API key." } }, { status: 401 }) },
     [],
   );
-  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "list_forms" } }), deps(f))) as JsonRpcMessage;
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "list_forms" } }), { ...deps(f), reloadKey: async () => "fwk_live_x" })) as JsonRpcMessage;
   assert.equal(reply.id, 7);
   const err = reply.error as { message: string };
   assert.match(err.message, /401/);
@@ -100,7 +100,7 @@ test("a malformed list_forms result becomes a tool error, not an exception", asy
 
 test("a plain-text 401 still carries the pair-again hint", async () => {
   const f = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response("Unauthorized", { status: 401 }) }, []);
-  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 14, method: "ping" }), deps(f))) as JsonRpcMessage;
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 14, method: "ping" }), { ...deps(f), reloadKey: async () => "fwk_live_x" })) as JsonRpcMessage;
   assert.match((reply.error as { message: string }).message, /401.*pair <code>/);
 });
 
@@ -300,4 +300,50 @@ test("send_test_submission skips malformed form-list entries instead of throwing
   const result = missing.result as { isError: boolean; content: { text: string }[] };
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /No form f9/);
+});
+
+test("a 401 re-reads the stored key and retries once with it", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch(
+    {
+      "https://app.test/api/v1/mcp": (init) =>
+        (init?.headers as Record<string, string>).authorization === "Bearer fwk_new"
+          ? Response.json({ jsonrpc: "2.0", id: 40, result: {} })
+          : Response.json({ error: { code: "unauthorized", message: "Invalid or revoked API key." } }, { status: 401 }),
+    },
+    calls,
+  );
+  const d = { ...deps(f), reloadKey: async () => "fwk_new" };
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 40, method: "ping" }), d)) as JsonRpcMessage;
+  assert.deepEqual(reply.result, {});
+  assert.equal(calls.length, 2);
+  assert.equal(d.apiKey, "fwk_new");
+  // The next request goes out with the new key straight away.
+  await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 41, method: "ping" }), d);
+  assert.equal((calls[2].init?.headers as Record<string, string>).authorization, "Bearer fwk_new");
+});
+
+test("a 401 with an unchanged stored key is reported once, with the matching hint", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response("Unauthorized", { status: 401 }) }, calls);
+  const stored = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 42, method: "ping" }), { ...deps(f), reloadKey: async () => "fwk_live_x" })) as JsonRpcMessage;
+  assert.equal(calls.length, 1);
+  assert.match((stored.error as { message: string }).message, /pair <code>.*next request/);
+  const env = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 43, method: "ping" }), deps(f))) as JsonRpcMessage;
+  assert.match((env.error as { message: string }).message, /FORMWARD_API_KEY is set/);
+});
+
+test("an unpaired server picks up a key stored after it started", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => Response.json({ jsonrpc: "2.0", id: 44, result: {} }) }, calls);
+  let stored: string | null = null;
+  const d = { ...deps(f), apiKey: null as string | null, reloadKey: async () => stored };
+  const before = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 44, method: "tools/call", params: { name: "list_forms", arguments: {} } }), d)) as JsonRpcMessage;
+  assert.equal((before.result as { isError: boolean }).isError, true);
+  assert.equal(calls.length, 0);
+  stored = "fwk_live_x";
+  const after = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 44, method: "tools/call", params: { name: "list_forms", arguments: {} } }), d)) as JsonRpcMessage;
+  assert.deepEqual(after.result, {});
+  assert.equal(calls.length, 1);
+  assert.equal((calls[0].init?.headers as Record<string, string>).authorization, "Bearer fwk_live_x");
 });
