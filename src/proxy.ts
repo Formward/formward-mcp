@@ -58,17 +58,23 @@ function toolResult(id: JsonRpcMessage["id"], text: string, isError = false): Js
   return { jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text }], isError } };
 }
 
+/**
+ * Parse one stdio line. Malformed JSON is a parse error (-32700); valid JSON
+ * that is not an object or array (null, a number, a string) is a valid parse
+ * but an invalid request (-32600), as the JSON-RPC spec distinguishes them.
+ */
 export function parseLine(line: string): JsonRpcMessage | JsonRpcMessage[] | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) return parsed as JsonRpcMessage[];
-    if (parsed && typeof parsed === "object") return parsed as JsonRpcMessage;
+    parsed = JSON.parse(trimmed);
   } catch {
-    // fall through
+    return { id: null, method: "__parse_error__" };
   }
-  return { id: null, method: "__invalid__" };
+  if (Array.isArray(parsed)) return parsed as JsonRpcMessage[];
+  if (parsed && typeof parsed === "object") return parsed as JsonRpcMessage;
+  return { id: null, method: "__invalid_request__" };
 }
 
 /** Forward one message to the remote MCP endpoint. Returns null when there is nothing to write (notification). */
@@ -251,6 +257,7 @@ export async function handleLine(line: string, deps: ProxyDeps): Promise<JsonRpc
     const out = replies.filter((r): r is JsonRpcMessage => r !== null);
     return out.length > 0 ? out : null;
   }
-  if (msg.method === "__invalid__") return rpcError(null, "Parse error", -32700);
+  if (msg.method === "__parse_error__") return rpcError(null, "Parse error", -32700);
+  if (msg.method === "__invalid_request__") return rpcError(null, "Invalid Request", -32600);
   return handleOne(msg, deps);
 }

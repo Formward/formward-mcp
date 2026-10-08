@@ -109,6 +109,14 @@ test("malformed input is answered with a parse error", async () => {
   assert.deepEqual(reply.error, { code: -32700, message: "Parse error" });
 });
 
+test("valid JSON that is not a request is an invalid request, not a parse error", async () => {
+  for (const line of ["null", "1", '"ping"', "true"]) {
+    const reply = (await handleLine(line, deps(fakeFetch({}, [])))) as JsonRpcMessage;
+    assert.deepEqual(reply.error, { code: -32600, message: "Invalid Request" }, line);
+    assert.equal(reply.id, null);
+  }
+});
+
 /** The remote MCP endpoint answering list_forms with the given forms (how the real server responds). */
 function listFormsRoute(forms: { id: string; name: string; endpoint: string }[]) {
   return (init?: RequestInit) => {
