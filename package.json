@@ -6,7 +6,7 @@
   "homepage": "https://formward.eu/agents",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Formward/formward-mcp.git"
+    "url": "git+https://github.com/Formward/formward-mcp.git"
   },
   "bugs": {
     "url": "https://github.com/Formward/formward-mcp/issues"
@@ -27,6 +27,7 @@
   "main": "dist/cli.js",
   "files": [
     "dist",
+    "!dist/test",
     "README.md",
     "LICENSE"
   ],
