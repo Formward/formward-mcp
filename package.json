@@ -1,0 +1,46 @@
+{
+  "name": "@formward/mcp",
+  "version": "0.1.0",
+  "description": "MCP server and pairing CLI for Formward: let your coding agent create forms, fetch the snippet and verify a test submission against your Formward workspace.",
+  "license": "MIT",
+  "homepage": "https://formward.eu/agents",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Formward/formward-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Formward/formward-mcp/issues"
+  },
+  "keywords": [
+    "formward",
+    "mcp",
+    "model-context-protocol",
+    "forms",
+    "form-backend",
+    "claude-code",
+    "cursor",
+    "gdpr"
+  ],
+  "bin": {
+    "formward-mcp": "dist/cli.js"
+  },
+  "main": "dist/cli.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test \"dist/test/**/*.test.js\"",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
