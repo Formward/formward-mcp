@@ -158,3 +158,19 @@ test("an unreadable credential store is moved aside, never overwritten", async (
   assert.equal(fs.readFileSync(path.join(dir, names[1]), "utf8"), "{ not json");
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("an empty lock left by a crash during creation is taken over once it is old", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { loadCredential, saveCredential } = await import("../config");
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-empty-"));
+  const file = path.join(dir, "credentials.json");
+  process.env.FORMWARD_CREDENTIALS_FILE = file;
+  fs.writeFileSync(`${file}.lock`, "");
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(`${file}.lock`, old, old);
+  await saveCredential("https://a.test", { apiKey: "fwk_a", workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" });
+  assert.equal((await loadCredential("https://a.test"))?.apiKey, "fwk_a");
+  assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

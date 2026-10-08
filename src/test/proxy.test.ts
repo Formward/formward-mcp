@@ -397,3 +397,10 @@ test("only a complete JSON-RPC response for this request is passed through", asy
   const chatty = fakeFetch({ "https://app.test/api/v1/mcp": () => Response.json({ jsonrpc: "2.0", id: null, result: {} }) }, []);
   assert.equal(await handleLine(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }), deps(chatty)), null);
 });
+
+test("an upstream error with id null is not accepted for a request that had an id", async () => {
+  const f = fakeFetch({ "https://app.test/api/v1/mcp": () => Response.json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } }) }, []);
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 62, method: "ping" }), deps(f))) as JsonRpcMessage;
+  assert.equal(reply.id, 62);
+  assert.match((reply.error as { message: string }).message, /malformed JSON-RPC response/);
+});

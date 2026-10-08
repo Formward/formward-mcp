@@ -185,8 +185,9 @@ function isResponseFor(v: unknown, id: string | number | null): v is JsonRpcMess
   const m = v as JsonRpcMessage;
   if (m.jsonrpc !== "2.0") return false;
   if (("result" in m) === ("error" in m)) return false;
-  // An error reply to an unparseable request legitimately carries id null.
-  return m.id === id || (m.id === null && "error" in m);
+  // forward() only sends requests that already passed isValidRequest, so the
+  // reply must echo the id exactly; a null-id error cannot be correlated.
+  return m.id === id;
 }
 
 interface FormListItem {

@@ -127,7 +127,10 @@ async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> 
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       const owner = await fs.readFile(lock, "utf8").catch(() => "");
       const ownerPid = Number(owner.split(":")[0]);
-      if (owner && ownerPid !== process.pid && !processAlive(ownerPid)) {
+      // An empty lock is one whose creator died between open() and the token
+      // write (or is about to write it): abandoned once it stays empty for 2 s.
+      const emptyAndOld = !owner && (await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0)) > 2000;
+      if (emptyAndOld || (owner && ownerPid !== process.pid && !processAlive(ownerPid))) {
         // Only one contender wins the rename, so nobody can unlink a lock the
         // winner has just re-created. Losers try again.
         const taken = `${lock}.${process.pid}.stale`;
