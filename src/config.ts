@@ -110,42 +110,52 @@ async function writeAll(file: string, all: CredentialFile): Promise<void> {
 async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
-  // The lock names its owner (pid plus a token) and is created atomically
-  // WITH that content (see tryCreateLock), so there is no moment where the
-  // lock exists but says nothing. A lock is taken over only when its owner
-  // process is gone, never on age alone: a suspended or stalled owner is
-  // still an owner. A process removes only a lock that still carries its
-  // own token, so a takeover can never be undone by the old owner's cleanup.
+  // The lock names its owner (pid plus a token) and, where the filesystem
+  // has hard links, is created atomically WITH that content: there is no
+  // moment where the lock exists but says nothing. A lock is taken over only
+  // when its owner process is gone, never on age alone: a suspended or
+  // stalled owner is still an owner. A process removes only a lock that
+  // still carries its own token, so a takeover cannot be undone by the old
+  // owner's cleanup.
   const token = `${process.pid}:${Math.random().toString(36).slice(2)}`;
   const timeoutMs = Number(process.env.FORMWARD_LOCK_TIMEOUT_MS) || 15_000;
   const deadline = Date.now() + timeoutMs;
+  let hardLinks = true;
   for (;;) {
-    if (await tryCreateLock(lock, token)) break;
+    const attempt = await tryCreateLock(lock, token);
+    hardLinks = attempt.hardLinks;
+    if (attempt.created) break;
     const owner = await fs.readFile(lock, "utf8").catch(() => "");
     const ownerPid = Number(owner.split(":")[0]);
-    // An empty lock can only come from the no-hard-link fallback in
-    // tryCreateLock (its creator died, or is still about to write); it counts
-    // as abandoned once it has stayed empty for 2 s.
+    // An empty lock cannot be produced where hard links work, so one found
+    // there is a leftover and counts as abandoned after 2 s. Without hard
+    // links an empty lock may be a creator between open() and its token
+    // write, and nothing could restore a wrongly taken lock atomically, so it
+    // is never taken over: after a crash at that exact point the user deletes
+    // the lock the timeout error names.
     const abandoned = owner
       ? ownerPid !== process.pid && !processAlive(ownerPid)
-      : (await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0)) > 2000;
+      : hardLinks && (await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0)) > 2000;
     if (abandoned) {
-      // Only one contender wins the rename. What was moved is then checked
-      // again: between the look and the rename the lock may have been
-      // re-created by someone else, or an empty one may have received its
-      // creator's token. A lock that turns out to be live is put back.
+      // Only one contender wins the rename. What was moved is checked again:
+      // the path may have been re-created by someone else since the look.
+      // A lock that turns out to belong to a live process is put back.
       const taken = `${lock}.${process.pid}.stale`;
       if (await fs.rename(lock, taken).then(() => true, () => false)) {
         const moved = await fs.readFile(taken, "utf8").catch(() => "");
         const movedPid = Number(moved.split(":")[0]);
         if (moved && movedPid !== process.pid && processAlive(movedPid)) {
-          await fs.link(taken, lock).catch(() => undefined);
+          if (hardLinks) await fs.link(taken, lock).catch(() => undefined);
+          else await fs.rename(taken, lock).catch(() => undefined);
         }
         await fs.rm(taken, { force: true });
       }
       continue;
     }
-    if (Date.now() > deadline) throw new Error(`Credentials file is locked by another formward-mcp process (${owner.split(":")[0] || "unknown pid"}): ${lock}`);
+    if (Date.now() > deadline) {
+      const who = owner.split(":")[0] || "unknown pid";
+      throw new Error(`Credentials file is locked by another formward-mcp process (${who}): ${lock}. If no other formward-mcp is running, delete that file and retry.`);
+    }
     await new Promise((r) => setTimeout(r, 25 + Math.random() * 50));
   }
   try {
@@ -160,25 +170,25 @@ async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> 
  * private file and hard-linked to the lock path, which either succeeds
  * (the lock appears fully formed) or fails with EEXIST. Filesystems without
  * hard links fall back to create-then-write, confirmed by reading the lock
- * back: if it does not carry this token, it was taken over while we stalled.
+ * back; `hardLinks: false` tells the caller which rules apply.
  */
-async function tryCreateLock(lock: string, token: string): Promise<boolean> {
+async function tryCreateLock(lock: string, token: string): Promise<{ created: boolean; hardLinks: boolean }> {
   const tmp = `${lock}.${token.replace(":", ".")}.tmp`;
   await fs.writeFile(tmp, token, { mode: 0o600 });
   try {
     await fs.link(tmp, lock);
-    return true;
+    return { created: true, hardLinks: true };
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") return { created: false, hardLinks: true };
     try {
       const handle = await fs.open(lock, "wx");
       await handle.writeFile(token);
       await handle.close();
     } catch (e2) {
-      if ((e2 as NodeJS.ErrnoException).code === "EEXIST") return false;
+      if ((e2 as NodeJS.ErrnoException).code === "EEXIST") return { created: false, hardLinks: false };
       throw e2;
     }
-    return (await fs.readFile(lock, "utf8").catch(() => "")) === token;
+    return { created: (await fs.readFile(lock, "utf8").catch(() => "")) === token, hardLinks: false };
   } finally {
     await fs.rm(tmp, { force: true });
   }
