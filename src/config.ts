@@ -44,17 +44,35 @@ export async function loadCredential(api: string): Promise<StoredCredential | nu
   return all[api] ?? null;
 }
 
+/**
+ * Replace the store atomically: a crash after writeFile() truncated the old
+ * file would leave an empty store, and readAll() would then silently forget
+ * every origin's key. The temporary file lives next to the destination (same
+ * filesystem, so rename is atomic) and gets the final mode before it holds a
+ * key.
+ */
+async function writeAll(file: string, all: CredentialFile): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    await fs.writeFile(tmp, JSON.stringify(all, null, 2) + "\n", { mode: 0o600 });
+    try {
+      await fs.chmod(tmp, 0o600);
+    } catch {
+      // Windows ignores POSIX modes; the file is still inside the user's profile.
+    }
+    await fs.rename(tmp, file);
+  } catch (e) {
+    await fs.rm(tmp, { force: true });
+    throw e;
+  }
+}
+
 export async function saveCredential(api: string, cred: StoredCredential): Promise<string> {
   const file = credentialsPath();
   const all = await readAll();
   all[api] = cred;
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await fs.writeFile(file, JSON.stringify(all, null, 2) + "\n", { mode: 0o600 });
-  try {
-    await fs.chmod(file, 0o600);
-  } catch {
-    // Windows ignores POSIX modes; the file is still inside the user's profile.
-  }
+  await writeAll(file, all);
   return file;
 }
 
@@ -62,7 +80,7 @@ export async function removeCredential(api: string): Promise<boolean> {
   const all = await readAll();
   if (!all[api]) return false;
   delete all[api];
-  await fs.writeFile(credentialsPath(), JSON.stringify(all, null, 2) + "\n", { mode: 0o600 });
+  await writeAll(credentialsPath(), all);
   return true;
 }
 

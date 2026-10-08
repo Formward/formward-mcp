@@ -68,3 +68,22 @@ test("a 200 whose body is not a status object is transient, not a crash", async 
   assert.equal(result.ok, true);
   assert.equal(calls.filter((c) => c.url.includes("/status")).length, 3);
 });
+
+test("the credential store is replaced whole, keeps other origins and leaves no temporary file", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { loadCredential, removeCredential, saveCredential } = await import("../config");
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-"));
+  const file = path.join(dir, "credentials.json");
+  process.env.FORMWARD_CREDENTIALS_FILE = file;
+  const cred = (apiKey: string) => ({ apiKey, workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" });
+  await saveCredential("https://a.test", cred("fwk_a"));
+  await saveCredential("https://b.test", cred("fwk_b"));
+  assert.equal((await loadCredential("https://a.test"))?.apiKey, "fwk_a");
+  assert.equal((await loadCredential("https://b.test"))?.apiKey, "fwk_b");
+  assert.equal(await removeCredential("https://a.test"), true);
+  assert.equal(await loadCredential("https://a.test"), null);
+  assert.equal((await loadCredential("https://b.test"))?.apiKey, "fwk_b");
+  assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
