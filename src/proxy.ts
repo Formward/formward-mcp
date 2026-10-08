@@ -162,19 +162,31 @@ export async function forward(msg: JsonRpcMessage, deps: ProxyDeps, retried = fa
   if (res.status === 202 || !text) {
     return isNotification ? null : rpcError(id, `Formward API ${res.status}: empty response to a request.`);
   }
-  // Valid JSON of the wrong shape (null, an array, a string) must not pass
-  // through as the reply: a null would read as "nothing to write" and leave
-  // the client waiting for an answer that never comes.
+  // A notification never gets a reply written, whatever the server sent back.
+  if (isNotification) return null;
+  // Only a complete JSON-RPC response for THIS request goes to the client:
+  // null, an array, `{}`, a message without `jsonrpc`, or one with another id
+  // could not be correlated and would leave the client waiting.
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     return rpcError(id, "Formward API returned a non-JSON response.");
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return rpcError(id, "Formward API returned a response that is not a JSON-RPC message.");
+  if (!isResponseFor(parsed, id ?? null)) {
+    return rpcError(id, "Formward API returned a malformed JSON-RPC response.");
   }
-  return parsed as JsonRpcMessage;
+  return parsed;
+}
+
+/** A JSON-RPC 2.0 response object for the request with the given id (exactly one of result/error). */
+function isResponseFor(v: unknown, id: string | number | null): v is JsonRpcMessage {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const m = v as JsonRpcMessage;
+  if (m.jsonrpc !== "2.0") return false;
+  if (("result" in m) === ("error" in m)) return false;
+  // An error reply to an unparseable request legitimately carries id null.
+  return m.id === id || (m.id === null && "error" in m);
 }
 
 interface FormListItem {

@@ -117,3 +117,22 @@ test("a stale lock is taken over, and concurrent takers still serialize", async 
   assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("an unreadable credential store is moved aside, never overwritten", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { loadCredential, saveCredential } = await import("../config");
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-corrupt-"));
+  const file = path.join(dir, "credentials.json");
+  process.env.FORMWARD_CREDENTIALS_FILE = file;
+  fs.writeFileSync(file, "{ not json");
+  assert.equal(await loadCredential("https://a.test"), null);
+  await saveCredential("https://a.test", { apiKey: "fwk_a", workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" });
+  assert.equal((await loadCredential("https://a.test"))?.apiKey, "fwk_a");
+  const names = fs.readdirSync(dir).sort();
+  assert.equal(names.length, 2);
+  assert.equal(names[0], "credentials.json");
+  assert.match(names[1], /^credentials\.json\.corrupt-\d+$/);
+  assert.equal(fs.readFileSync(path.join(dir, names[1]), "utf8"), "{ not json");
+  fs.rmSync(dir, { recursive: true, force: true });
+});

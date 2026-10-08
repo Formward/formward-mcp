@@ -32,11 +32,43 @@ export function credentialsPath(): string {
 
 async function readAll(): Promise<CredentialFile> {
   try {
-    const parsed: unknown = JSON.parse(await fs.readFile(credentialsPath(), "utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as CredentialFile) : {};
+    return (await readStore(credentialsPath())).all;
   } catch {
     return {};
   }
+}
+
+/**
+ * The store as it is on disk: absent, readable, or present but unreadable.
+ * Reads treat the last case as empty; writes must not, or the next save
+ * would quietly replace every origin's key with the one just paired.
+ */
+async function readStore(file: string): Promise<{ all: CredentialFile; corrupt: boolean }> {
+  let text: string;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { all: {}, corrupt: false };
+    throw e;
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return { all: parsed as CredentialFile, corrupt: false };
+  } catch {
+    // fall through
+  }
+  return { all: {}, corrupt: true };
+}
+
+/** For writes: an unreadable store is moved aside (never overwritten) and the write starts from empty. */
+async function readForWrite(file: string): Promise<CredentialFile> {
+  const { all, corrupt } = await readStore(file);
+  if (corrupt) {
+    const aside = `${file}.corrupt-${Date.now()}`;
+    await fs.rename(file, aside);
+    process.stderr.write(`formward-mcp: ${file} was not a valid credential store; moved it to ${aside} and started a new one.\n`);
+  }
+  return all;
 }
 
 export async function loadCredential(api: string): Promise<StoredCredential | null> {
@@ -109,7 +141,7 @@ async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> 
 export async function saveCredential(api: string, cred: StoredCredential): Promise<string> {
   const file = credentialsPath();
   await withStoreLock(file, async () => {
-    const all = await readAll();
+    const all = await readForWrite(file);
     all[api] = cred;
     await writeAll(file, all);
   });
@@ -119,7 +151,7 @@ export async function saveCredential(api: string, cred: StoredCredential): Promi
 export async function removeCredential(api: string): Promise<boolean> {
   const file = credentialsPath();
   return withStoreLock(file, async () => {
-    const all = await readAll();
+    const all = await readForWrite(file);
     if (!all[api]) return false;
     delete all[api];
     await writeAll(file, all);

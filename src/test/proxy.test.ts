@@ -378,6 +378,22 @@ test("a 200 whose JSON is not a message object is answered with an error, never 
     const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 60, method: "ping" }), deps(f))) as JsonRpcMessage;
     assert.ok(reply, `reply for body ${body}`);
     assert.equal(reply.id, 60);
-    assert.match((reply.error as { message: string }).message, /not a JSON-RPC message/);
+    assert.match((reply.error as { message: string }).message, /malformed JSON-RPC response/);
   }
+});
+
+test("only a complete JSON-RPC response for this request is passed through", async () => {
+  const bad = ["{}", '{"jsonrpc":"2.0","id":999,"result":{}}', '{"id":61,"result":{}}', '{"jsonrpc":"2.0","id":61}', '{"jsonrpc":"2.0","id":61,"result":{},"error":{"code":1,"message":"x"}}'];
+  for (const body of bad) {
+    const f = fakeFetch({ "https://app.test/api/v1/mcp": () => new Response(body, { status: 200, headers: { "content-type": "application/json" } }) }, []);
+    const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 61, method: "ping" }), deps(f))) as JsonRpcMessage;
+    assert.equal(reply.id, 61, body);
+    assert.match((reply.error as { message: string }).message, /malformed JSON-RPC response/, body);
+  }
+  const ok = fakeFetch({ "https://app.test/api/v1/mcp": () => Response.json({ jsonrpc: "2.0", id: 61, result: { pong: true } }) }, []);
+  const reply = (await handleLine(JSON.stringify({ jsonrpc: "2.0", id: 61, method: "ping" }), deps(ok))) as JsonRpcMessage;
+  assert.deepEqual(reply.result, { pong: true });
+  // A notification is silent even when the server answers it with a body.
+  const chatty = fakeFetch({ "https://app.test/api/v1/mcp": () => Response.json({ jsonrpc: "2.0", id: null, result: {} }) }, []);
+  assert.equal(await handleLine(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }), deps(chatty)), null);
 });
