@@ -77,9 +77,25 @@ test("a non-2.0 request never runs the local tool", async () => {
   )) as JsonRpcMessage;
   assert.deepEqual(reply.error, { code: -32600, message: "Invalid Request" });
   assert.equal(calls.length, 0);
-  const silent = await handleLine(JSON.stringify({ method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId: "f1" } } }), deps(f));
-  assert.equal(silent, null);
+  // Missing jsonrpc and id: not a notification, so it is answered with a null id.
+  const noId = (await handleLine(JSON.stringify({ method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId: "f1" } } }), deps(f))) as JsonRpcMessage;
+  assert.equal(noId.id, null);
+  assert.deepEqual(noId.error, { code: -32600, message: "Invalid Request" });
   assert.equal(calls.length, 0);
+});
+
+test("a malformed list_forms result becomes a tool error, not an exception", async () => {
+  const f = fakeFetch(
+    { "https://app.test/api/v1/mcp": () => Response.json({ jsonrpc: "2.0", id: "lookup", result: { content: { not: "an array" } } }) },
+    [],
+  );
+  const reply = (await handleLine(
+    JSON.stringify({ jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: TEST_TOOL.name, arguments: { formId: "f1" } } }),
+    deps(f),
+  )) as JsonRpcMessage;
+  const result = reply.result as { isError: boolean; content: { text: string }[] };
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Could not list forms/);
 });
 
 test("malformed input is answered with a parse error", async () => {

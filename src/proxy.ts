@@ -140,8 +140,9 @@ async function lookupEndpoint(formId: string, deps: ProxyDeps): Promise<FormList
   }
   if (!reply) return { error: "Could not list forms: empty response." };
   if (reply.error) return { error: `Could not list forms: ${(reply.error as { message?: string }).message ?? "error"}` };
-  const result = reply.result as { content?: { type: string; text?: string }[]; isError?: boolean } | undefined;
-  const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+  const result = reply.result as { content?: unknown; isError?: boolean } | undefined;
+  const content = Array.isArray(result?.content) ? (result.content as { type?: string; text?: string }[]) : [];
+  const text = content.find((c) => c && c.type === "text" && typeof c.text === "string")?.text ?? "";
   let body: { data?: FormListItem[] };
   try {
     body = JSON.parse(text) as { data?: FormListItem[] };
@@ -219,9 +220,9 @@ function isValidRequest(msg: JsonRpcMessage): boolean {
 
 /** One message: local tool, or forwarded with the local tool spliced into tools/list. */
 async function handleOne(msg: JsonRpcMessage, deps: ProxyDeps): Promise<JsonRpcMessage | null> {
-  if (!isValidRequest(msg)) {
-    return msg.id === undefined ? null : rpcError(msg.id, "Invalid Request", -32600);
-  }
+  // Only a well-formed notification is silent; a malformed object without an
+  // id is still answered (with a null id), as the backend does.
+  if (!isValidRequest(msg)) return rpcError(msg.id ?? null, "Invalid Request", -32600);
   if (msg.method === "tools/call" && msg.params?.name === TEST_TOOL.name) {
     const args = (msg.params.arguments ?? {}) as Record<string, unknown>;
     const out = await sendTestSubmission(args, deps);
