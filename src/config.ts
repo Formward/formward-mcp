@@ -83,7 +83,7 @@ export async function loadCredential(api: string): Promise<StoredCredential | nu
  * filesystem, so rename is atomic) and gets the final mode before it holds a
  * key.
  */
-async function writeAll(file: string, all: CredentialFile): Promise<void> {
+async function writeAll(file: string, all: CredentialFile, owned?: () => Promise<void>): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
   try {
@@ -93,6 +93,8 @@ async function writeAll(file: string, all: CredentialFile): Promise<void> {
     } catch {
       // Windows ignores POSIX modes; the file is still inside the user's profile.
     }
+    // Last check before the store changes: the lock must still be ours.
+    if (owned) await owned();
     await fs.rename(tmp, file);
   } catch (e) {
     await fs.rm(tmp, { force: true });
@@ -107,7 +109,10 @@ async function writeAll(file: string, all: CredentialFile): Promise<void> {
  * O_EXCL next to the store; a lock older than 10 s is from a crashed process
  * and is taken over.
  */
-async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+/** Thrown inside the critical section when the lock no longer carries this process's token; the caller retries from scratch. */
+class LockLostError extends Error {}
+
+async function withStoreLock<T>(file: string, fn: (owned: () => Promise<void>) => Promise<T>): Promise<T> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
   // The lock names its owner (pid plus a token) and, where the filesystem
@@ -116,7 +121,9 @@ async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> 
   // when its owner process is gone, never on age alone: a suspended or
   // stalled owner is still an owner. A process removes only a lock that
   // still carries its own token, so a takeover cannot be undone by the old
-  // owner's cleanup.
+  // owner's cleanup. Takeover by rename is not atomic with the decision, so
+  // the critical section re-checks ownership right before it writes (owned)
+  // and starts over if the lock was displaced meanwhile.
   const token = `${process.pid}:${Math.random().toString(36).slice(2)}`;
   const timeoutMs = Number(process.env.FORMWARD_LOCK_TIMEOUT_MS) || 15_000;
   const deadline = Date.now() + timeoutMs;
@@ -138,15 +145,22 @@ async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> 
       : hardLinks && (await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0)) > 2000;
     if (abandoned) {
       // Only one contender wins the rename. What was moved is checked again:
-      // the path may have been re-created by someone else since the look.
-      // A lock that turns out to belong to a live process is put back.
+      // the path may have been re-created by someone else since the look. A
+      // lock that turns out to belong to a live process is put back; if the
+      // path was reacquired in the meantime it is kept aside, never deleted,
+      // and its owner's pre-write check (owned) makes that owner start over.
       const taken = `${lock}.${process.pid}.stale`;
       if (await fs.rename(lock, taken).then(() => true, () => false)) {
         const moved = await fs.readFile(taken, "utf8").catch(() => "");
         const movedPid = Number(moved.split(":")[0]);
         if (moved && movedPid !== process.pid && processAlive(movedPid)) {
-          if (hardLinks) await fs.link(taken, lock).catch(() => undefined);
-          else await fs.rename(taken, lock).catch(() => undefined);
+          const restored = hardLinks
+            ? await fs.link(taken, lock).then(() => true, () => false)
+            : await fs.access(lock).then(() => false, () => fs.rename(taken, lock).then(() => true, () => false));
+          if (!restored) {
+            await fs.rename(taken, `${lock}.displaced-${Date.now()}`).catch(() => undefined);
+            continue;
+          }
         }
         await fs.rm(taken, { force: true });
       }
@@ -158,10 +172,24 @@ async function withStoreLock<T>(file: string, fn: () => Promise<T>): Promise<T> 
     }
     await new Promise((r) => setTimeout(r, 25 + Math.random() * 50));
   }
+  const owned = async () => {
+    if ((await fs.readFile(lock, "utf8").catch(() => "")) !== token) throw new LockLostError(`Lost the credentials lock (${lock}) before writing; retrying.`);
+  };
   try {
-    return await fn();
+    return await fn(owned);
   } finally {
     if ((await fs.readFile(lock, "utf8").catch(() => "")) === token) await fs.rm(lock, { force: true });
+  }
+}
+
+/** Run a locked read-modify-write, starting over (up to 3 times) when the lock was displaced mid-way. */
+async function withStoreLockRetrying<T>(file: string, fn: (owned: () => Promise<void>) => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await withStoreLock(file, fn);
+    } catch (e) {
+      if (!(e instanceof LockLostError) || attempt >= 3) throw e;
+    }
   }
 }
 
@@ -206,21 +234,21 @@ function processAlive(pid: number): boolean {
 
 export async function saveCredential(api: string, cred: StoredCredential): Promise<string> {
   const file = credentialsPath();
-  await withStoreLock(file, async () => {
+  await withStoreLockRetrying(file, async (owned) => {
     const all = await readForWrite(file);
     all[api] = cred;
-    await writeAll(file, all);
+    await writeAll(file, all, owned);
   });
   return file;
 }
 
 export async function removeCredential(api: string): Promise<boolean> {
   const file = credentialsPath();
-  return withStoreLock(file, async () => {
+  return withStoreLockRetrying(file, async (owned) => {
     const all = await readForWrite(file);
     if (!all[api]) return false;
     delete all[api];
-    await writeAll(file, all);
+    await writeAll(file, all, owned);
     return true;
   });
 }
