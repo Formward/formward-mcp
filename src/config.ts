@@ -178,7 +178,11 @@ async function withStoreLock<T>(file: string, fn: (owned: () => Promise<void>) =
       if (await fs.rename(lock, taken).then(() => true, () => false)) {
         const moved = await fs.readFile(taken, "utf8").catch(() => "");
         const movedPid = Number(moved.split(":")[0]);
-        if (moved && movedPid !== process.pid && processAlive(movedPid)) {
+        // Restore only a lock that is NOT the one just judged abandoned (its
+        // content changed under us: someone re-created it). The judged one is
+        // never put back, even if its pid belongs to a live process: that is
+        // exactly the reused-pid case the age cutoff exists for.
+        if (moved !== owner && moved && movedPid !== process.pid && processAlive(movedPid)) {
           const restored = hardLinks
             ? await fs.link(taken, lock).then(() => true, () => false)
             : await fs.access(lock).then(() => false, () => fs.rename(taken, lock).then(() => true, () => false));

@@ -126,8 +126,8 @@ test("a fresh lock held by a live process is respected; one older than 60 s is t
   process.env.FORMWARD_CREDENTIALS_FILE = file;
   process.env.FORMWARD_LOCK_TIMEOUT_MS = "300";
   const cred = { apiKey: "fwk_a", workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" };
-  // Held by this very process under another token, written just now: alive and recent, so it must be respected until the timeout.
-  const foreign = `${process.pid}:someone-else`;
+  // Held by another live process (the parent shell), written just now: alive and recent, so it must be respected until the timeout.
+  const foreign = `${process.ppid}:someone-else`;
   fs.writeFileSync(`${file}.lock`, foreign);
   await assert.rejects(saveCredential("https://a.test", cred), /locked by another formward-mcp process/);
   assert.equal(fs.readFileSync(`${file}.lock`, "utf8"), foreign);
