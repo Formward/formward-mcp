@@ -159,9 +159,15 @@ async function withStoreLock<T>(file: string, fn: (owned: () => Promise<void>) =
     // write, and nothing could restore a wrongly taken lock atomically, so it
     // is never taken over: after a crash at that exact point the user deletes
     // the lock the timeout error names.
+    // A pid can be reused (after a reboot above all), so a live pid is not
+    // proof of a live holder. The critical section is a read-modify-write of
+    // a few hundred bytes; a lock older than 60 s belongs to a crashed holder
+    // whose pid came back, or to one so wedged that waiting is pointless. The
+    // holder's pre-write check (owned) keeps the store safe even then.
+    const ageMs = await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
     const abandoned = owner
-      ? ownerPid !== process.pid && !processAlive(ownerPid)
-      : hardLinks && (await fs.stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0)) > 2000;
+      ? (ownerPid !== process.pid && !processAlive(ownerPid)) || ageMs > 60_000
+      : hardLinks && ageMs > 2000;
     if (abandoned) {
       // Only one contender wins the rename. What was moved is checked again:
       // the path may have been re-created by someone else since the look. A

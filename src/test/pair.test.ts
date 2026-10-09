@@ -117,25 +117,27 @@ test("a lock left by a dead process is taken over, and concurrent takers still s
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("a lock held by a live process is never taken over, and its file is left alone", async () => {
+test("a fresh lock held by a live process is respected; one older than 60 s is taken over even from a live pid", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
-  const { saveCredential } = await import("../config");
+  const { loadCredential, saveCredential } = await import("../config");
   const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-live-"));
   const file = path.join(dir, "credentials.json");
   process.env.FORMWARD_CREDENTIALS_FILE = file;
   process.env.FORMWARD_LOCK_TIMEOUT_MS = "300";
-  // Held by this very process under another token: alive, so it must be respected until the timeout.
+  const cred = { apiKey: "fwk_a", workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" };
+  // Held by this very process under another token, written just now: alive and recent, so it must be respected until the timeout.
   const foreign = `${process.pid}:someone-else`;
   fs.writeFileSync(`${file}.lock`, foreign);
-  const old = new Date(Date.now() - 60_000);
-  fs.utimesSync(`${file}.lock`, old, old);
-  await assert.rejects(
-    saveCredential("https://a.test", { apiKey: "fwk_a", workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" }),
-    /locked by another formward-mcp process/,
-  );
+  await assert.rejects(saveCredential("https://a.test", cred), /locked by another formward-mcp process/);
   assert.equal(fs.readFileSync(`${file}.lock`, "utf8"), foreign);
   assert.equal(fs.existsSync(file), false);
+  // The same lock a minute old: a crashed holder whose pid was reused, or a wedged one. Taken over.
+  const old = new Date(Date.now() - 61_000);
+  fs.utimesSync(`${file}.lock`, old, old);
+  await saveCredential("https://a.test", cred);
+  assert.equal((await loadCredential("https://a.test"))?.apiKey, "fwk_a");
+  assert.deepEqual(fs.readdirSync(dir), ["credentials.json"]);
   delete process.env.FORMWARD_LOCK_TIMEOUT_MS;
   fs.rmSync(dir, { recursive: true, force: true });
 });
