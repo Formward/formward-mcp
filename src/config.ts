@@ -182,18 +182,20 @@ async function withStoreLock<T>(file: string, fn: (owned: () => Promise<void>) =
         // content changed under us: someone re-created it). The judged one is
         // never put back, even if its pid belongs to a live process: that is
         // exactly the reused-pid case the age cutoff exists for.
-        if (moved !== owner && moved && movedPid !== process.pid && processAlive(movedPid)) {
+        const live = moved !== owner && moved !== "" && movedPid !== process.pid && processAlive(movedPid);
+        if (!live) {
+          await fs.rm(taken, { force: true });
+        } else {
           const restored = hardLinks
             ? await fs.link(taken, lock).then(() => true, () => false)
             : await fs.access(lock).then(() => false, () => fs.rename(taken, lock).then(() => true, () => false));
-          if (!restored) {
-            await fs.rename(taken, `${lock}.displaced-${Date.now()}`).catch(() => undefined);
-            continue;
-          }
+          if (restored) await fs.rm(taken, { force: true });
+          else await fs.rename(taken, `${lock}.displaced-${Date.now()}`).catch(() => undefined);
         }
-        await fs.rm(taken, { force: true });
       }
-      continue;
+      // No early retry: the deadline and the pause below apply to takeover
+      // attempts too, so a rename that keeps failing (EBUSY on a network
+      // share) ends in the timeout error instead of a spin.
     }
     if (Date.now() > deadline) {
       const who = owner.split(":")[0] || "unknown pid";
