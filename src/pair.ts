@@ -31,6 +31,18 @@ interface StatusResponse {
   pollEveryMs?: number;
 }
 
+function isClaimResponse(v: unknown): v is ClaimResponse {
+  if (!v || typeof v !== "object") return false;
+  const c = v as Record<string, unknown>;
+  return (
+    typeof c.pairingId === "string" && c.pairingId.length > 0 &&
+    typeof c.pollToken === "string" && c.pollToken.length > 0 &&
+    typeof c.workspace === "string" &&
+    typeof c.expiresAt === "string" && Number.isFinite(new Date(c.expiresAt).getTime()) &&
+    (c.pollEveryMs === undefined || (typeof c.pollEveryMs === "number" && Number.isFinite(c.pollEveryMs)))
+  );
+}
+
 const STATUSES: readonly StatusResponse["status"][] = ["pending", "claimed", "approved", "denied", "expired"];
 
 /** A status payload with every field in its declared type; the key is only ever stored from one of these. */
@@ -73,11 +85,14 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
       body: JSON.stringify({ code: opts.code, agent: { name: opts.agentName, host: os.hostname() } }),
       signal: timeout(),
     });
-    const body = (await res.json().catch(() => ({}))) as Partial<ClaimResponse> & { message?: string; error?: string };
-    if (!res.ok || !body.pairingId || !body.pollToken) {
-      return { ok: false, reason: body.message || `Pairing failed (${res.status}).` };
-    }
-    claim = body as ClaimResponse;
+    const body: unknown = await res.json().catch(() => ({}));
+    const message = body && typeof body === "object" && typeof (body as { message?: unknown }).message === "string" ? (body as { message: string }).message : "";
+    if (!res.ok) return { ok: false, reason: message || `Pairing failed (${res.status}).` };
+    // Every field the poll loop depends on must have its declared type: a
+    // non-numeric pollEveryMs would make the loop spin, a bad expiresAt an
+    // immediate timeout, a non-string workspace a corrupt credential.
+    if (!isClaimResponse(body)) return { ok: false, reason: `Pairing failed: unexpected response from ${opts.api}.` };
+    claim = body;
   } catch (e) {
     return { ok: false, reason: `Could not reach ${opts.api}: ${e instanceof Error ? e.message : String(e)}` };
   }

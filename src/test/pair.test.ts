@@ -196,3 +196,20 @@ test("an approved payload with a malformed key is transient and nothing is store
   assert.equal(stored["https://app.test"].apiKey, "fwk_live_ok");
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("a malformed claim payload fails cleanly instead of entering the poll loop", async () => {
+  for (const bad of [
+    { ...CLAIM, pollEveryMs: "bad" },
+    { ...CLAIM, expiresAt: "not a date" },
+    { ...CLAIM, workspace: 42 },
+    { pairingId: CLAIM.pairingId },
+  ]) {
+    const calls: Call[] = [];
+    const f = fakeFetch({ "https://app.test/api/agent-pairing/claim": () => Response.json(bad, { status: 201 }) }, calls);
+    const result = await pair({ api: "https://app.test", code: "ABCD-EFGH", agentName: "t", fetchImpl: f, sleep: noSleep });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.match(result.reason, /unexpected response/);
+    assert.equal(calls.filter((c) => c.url.includes("/status")).length, 0);
+  }
+});
