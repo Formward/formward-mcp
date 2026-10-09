@@ -74,7 +74,7 @@ function isStoredCredential(v: unknown): v is StoredCredential {
   return (
     typeof c.apiKey === "string" && c.apiKey.length > 0 &&
     typeof c.workspace === "string" &&
-    typeof c.expiresAt === "string" &&
+    typeof c.expiresAt === "string" && Number.isFinite(new Date(c.expiresAt).getTime()) &&
     typeof c.pairedAt === "string"
   );
 }

@@ -60,7 +60,8 @@ function isStatusResponse(v: unknown): v is StatusResponse {
   const s = v as Record<string, unknown>;
   if (!STATUSES.includes(s.status as StatusResponse["status"])) return false;
   if (s.apiKey !== undefined && (typeof s.apiKey !== "string" || s.apiKey.length === 0)) return false;
-  if (s.keyExpiresAt !== undefined && typeof s.keyExpiresAt !== "string") return false;
+  // An unparseable expiry would compare as NaN, which is never "expired".
+  if (s.keyExpiresAt !== undefined && (typeof s.keyExpiresAt !== "string" || !Number.isFinite(new Date(s.keyExpiresAt).getTime()))) return false;
   if (s.pollEveryMs !== undefined && typeof s.pollEveryMs !== "number") return false;
   return true;
 }

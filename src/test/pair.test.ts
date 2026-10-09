@@ -261,3 +261,27 @@ test("a malformed record in the store is ignored and not carried over", async ()
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, "utf8"))).sort(), ["https://b.test", "https://d.test"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("an approved payload with an unparseable key expiry is transient; a valid one is stored", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const calls: Call[] = [];
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-pair-expiry-"));
+  process.env.FORMWARD_CREDENTIALS_FILE = path.join(dir, "credentials.json");
+  const f = fakeFetch(
+    {
+      "https://app.test/api/agent-pairing/claim": () => Response.json(CLAIM, { status: 201 }),
+      "https://app.test/api/agent-pairing/status": (_init, n) =>
+        n === 1 ? Response.json({ status: "approved", apiKey: "fwk_bad", keyExpiresAt: "invalid" }) : Response.json({ status: "approved", apiKey: "fwk_ok", keyExpiresAt: "2030-01-01T00:00:00.000Z" }),
+    },
+    calls,
+  );
+  const result = await pair({ api: "https://app.test", code: "ABCD-EFGH", agentName: "t", fetchImpl: f, sleep: noSleep });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.expiresAt, "2030-01-01T00:00:00.000Z");
+  assert.equal(calls.filter((c) => c.url.includes("/status")).length, 2);
+  const stored = JSON.parse(fs.readFileSync(process.env.FORMWARD_CREDENTIALS_FILE, "utf8")) as Record<string, { apiKey: string }>;
+  assert.equal(stored["https://app.test"].apiKey, "fwk_ok");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
