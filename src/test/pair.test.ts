@@ -213,3 +213,19 @@ test("a malformed claim payload fails cleanly instead of entering the poll loop"
     assert.equal(calls.filter((c) => c.url.includes("/status")).length, 0);
   }
 });
+
+test("a permanent status failure with a null body still stops the poll loop at once", async () => {
+  const calls: Call[] = [];
+  const f = fakeFetch(
+    {
+      "https://app.test/api/agent-pairing/claim": () => Response.json(CLAIM, { status: 201 }),
+      "https://app.test/api/agent-pairing/status": () => new Response("null", { status: 400, headers: { "content-type": "application/json" } }),
+    },
+    calls,
+  );
+  const result = await pair({ api: "https://app.test", code: "ABCD-EFGH", agentName: "t", fetchImpl: f, sleep: noSleep });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.reason, /Pairing status failed \(400\)/);
+  assert.equal(calls.filter((c) => c.url.includes("/status")).length, 1);
+});

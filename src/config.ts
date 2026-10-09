@@ -208,12 +208,20 @@ async function tryCreateLock(lock: string, token: string): Promise<{ created: bo
     return { created: true, hardLinks: true };
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "EEXIST") return { created: false, hardLinks: true };
+    const handle = await fs.open(lock, "wx").catch((e2: NodeJS.ErrnoException) => {
+      if (e2.code === "EEXIST") return null;
+      throw e2;
+    });
+    if (!handle) return { created: false, hardLinks: false };
     try {
-      const handle = await fs.open(lock, "wx");
       await handle.writeFile(token);
       await handle.close();
     } catch (e2) {
-      if ((e2 as NodeJS.ErrnoException).code === "EEXIST") return { created: false, hardLinks: false };
+      // A lock this attempt created but could not finish must not outlive
+      // it: empty, it would never be taken over; with a token, it would name
+      // a live process that is not holding it.
+      await handle.close().catch(() => undefined);
+      await fs.rm(lock, { force: true });
       throw e2;
     }
     return { created: (await fs.readFile(lock, "utf8").catch(() => "")) === token, hardLinks: false };

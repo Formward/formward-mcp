@@ -116,8 +116,11 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
       if (!res.ok) {
         if (res.status >= 500 || res.status === 408) continue; // transient: keep polling until the deadline
         // 400/401/404: this pairing cannot succeed; repeating the call would only run out the clock.
-        const body = (await res.json().catch(() => ({}))) as { message?: string };
-        return { ok: false, reason: body.message || `Pairing status failed (${res.status}). Create a new code in the dashboard.` };
+        // The body is whatever the server sent (null included): read it defensively so a
+        // malformed error body cannot turn a permanent failure into endless polling.
+        const errBody: unknown = await res.json().catch(() => ({}));
+        const errMessage = errBody && typeof errBody === "object" && typeof (errBody as { message?: unknown }).message === "string" ? (errBody as { message: string }).message : "";
+        return { ok: false, reason: errMessage || `Pairing status failed (${res.status}). Create a new code in the dashboard.` };
       }
       const body: unknown = await res.json();
       // A 200 with a body that is not a status object (null, a string, a
