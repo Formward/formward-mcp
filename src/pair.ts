@@ -31,6 +31,15 @@ interface StatusResponse {
   pollEveryMs?: number;
 }
 
+/**
+ * The server's suggested poll interval, kept within sane bounds: below 1 s
+ * would hammer the status endpoint, and anything above 2^31-1 ms is treated
+ * by setTimeout as 1 ms, which would do the same.
+ */
+function clampInterval(ms: number): number {
+  return Math.min(15_000, Math.max(1000, ms));
+}
+
 function isClaimResponse(v: unknown): v is ClaimResponse {
   if (!v || typeof v !== "object") return false;
   const c = v as Record<string, unknown>;
@@ -98,7 +107,7 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
   }
 
   const deadline = new Date(claim.expiresAt).getTime();
-  let every = Math.max(1000, claim.pollEveryMs ?? 3000);
+  let every = clampInterval(claim.pollEveryMs ?? 3000);
   while (Date.now() < deadline + 5000) {
     await sleep(every);
     let status: StatusResponse;
@@ -131,7 +140,7 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
     } catch {
       continue; // transient network error or non-JSON body: keep polling until the deadline
     }
-    if (status.pollEveryMs) every = Math.max(1000, status.pollEveryMs);
+    if (status.pollEveryMs) every = clampInterval(status.pollEveryMs);
     opts.onStatus?.(status.status);
     if (status.status === "approved" && status.apiKey) {
       const expiresAt = status.keyExpiresAt ?? new Date(Date.now() + 30 * 86400000).toISOString();

@@ -53,11 +53,30 @@ async function readStore(file: string): Promise<{ all: CredentialFile; corrupt: 
   }
   try {
     const parsed: unknown = JSON.parse(text);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return { all: parsed as CredentialFile, corrupt: false };
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      // Only well-formed records count: a malformed entry is neither returned
+      // (it would become "Bearer undefined") nor carried over on the next write.
+      const all: CredentialFile = {};
+      for (const [api, cred] of Object.entries(parsed as Record<string, unknown>)) {
+        if (isStoredCredential(cred)) all[api] = cred;
+      }
+      return { all, corrupt: false };
+    }
   } catch {
     // fall through
   }
   return { all: {}, corrupt: true };
+}
+
+function isStoredCredential(v: unknown): v is StoredCredential {
+  if (!v || typeof v !== "object") return false;
+  const c = v as Record<string, unknown>;
+  return (
+    typeof c.apiKey === "string" && c.apiKey.length > 0 &&
+    typeof c.workspace === "string" &&
+    typeof c.expiresAt === "string" &&
+    typeof c.pairedAt === "string"
+  );
 }
 
 /** For writes: an unreadable store is moved aside (never overwritten) and the write starts from empty. */

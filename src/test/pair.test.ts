@@ -229,3 +229,35 @@ test("a permanent status failure with a null body still stops the poll loop at o
   assert.match(result.reason, /Pairing status failed \(400\)/);
   assert.equal(calls.filter((c) => c.url.includes("/status")).length, 1);
 });
+
+test("the poll interval is clamped: an oversized pollEveryMs cannot become a 1 ms loop", async () => {
+  const sleeps: number[] = [];
+  const f = fakeFetch(
+    {
+      "https://app.test/api/agent-pairing/claim": () => Response.json({ ...CLAIM, pollEveryMs: 2147483648 }, { status: 201 }),
+      "https://app.test/api/agent-pairing/status": (_init, n) =>
+        n === 1 ? Response.json({ status: "pending", pollEveryMs: 5 }) : Response.json({ status: "denied" }),
+    },
+    [],
+  );
+  const result = await pair({ api: "https://app.test", code: "ABCD-EFGH", agentName: "t", fetchImpl: f, sleep: async (ms) => { sleeps.push(ms); } });
+  assert.equal(result.ok, false);
+  assert.deepEqual(sleeps, [15_000, 1000]);
+});
+
+test("a malformed record in the store is ignored and not carried over", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const { loadCredential, saveCredential } = await import("../config");
+  const dir = fs.mkdtempSync(path.join(process.env.TEMP || process.env.TMPDIR || "/tmp", "formward-store-record-"));
+  const file = path.join(dir, "credentials.json");
+  process.env.FORMWARD_CREDENTIALS_FILE = file;
+  const good = { apiKey: "fwk_b", workspace: "Acme", expiresAt: "2030-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z" };
+  fs.writeFileSync(file, JSON.stringify({ "https://a.test": {}, "https://b.test": good, "https://c.test": { apiKey: 7 } }));
+  assert.equal(await loadCredential("https://a.test"), null);
+  assert.equal(await loadCredential("https://c.test"), null);
+  assert.equal((await loadCredential("https://b.test"))?.apiKey, "fwk_b");
+  await saveCredential("https://d.test", { ...good, apiKey: "fwk_d" });
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, "utf8"))).sort(), ["https://b.test", "https://d.test"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
